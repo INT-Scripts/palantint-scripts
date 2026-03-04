@@ -1,0 +1,32 @@
+[project]
+name = "palantint-scripts"
+version = "0.1.0"
+description = "PalantINT Data Ingestion & OSINT Pipeline Scripts"
+readme = "README.md"
+authors = [{ name = "PalantINT Team" }]
+requires-python = ">=3.13"
+dependencies = [
+    "rich",
+    "httpx",
+    "beautifulsoup4",
+    "requests",
+    "unidecode",
+    "sqlmodel",
+    "sqlalchemy",
+    "pydantic",
+    "opencv-python",
+    "numpy",
+    "svgpathtools",
+]
+
+[project.scripts]
+palantint-scrape = "palantint_scripts.scrape_all:main"
+palantint-admin = "palantint_scripts.create_admin:main"
+palantint-svg = "palantint_scripts.svg_processor:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/palantint_scripts"]
