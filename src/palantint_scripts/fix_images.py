@@ -1,18 +1,11 @@
-"""Find students with missing profile images and download them."""
-
 import asyncio
 import os
 import sys
 import time
-from urllib.parse import urljoin
-
-import requests
-from bs4 import BeautifulSoup
+from casint import CASClient
+from trombint.client import TrombINT
 from sqlalchemy import select
-
-import sys
-# Ensure backend is in path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../backend/src")))
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import AsyncSessionLocal
 from db.models import Student
@@ -23,97 +16,75 @@ PROFILES_DIR = os.path.join(
 )
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
-CAS_LOGIN_URL = "https://cas6.imtbs-tsp.eu/cas/login"
-ETUDIANTS_URL = "https://trombi.imtbs-tsp.eu/etudiants.php"
+async def fix_missing_images(context):
+    """
+    Standardized entry point using PipelineContext.
+    """
+    progress = context.progress
+    task_id = context.task_id
+    cas_client = context.cas_client
+    db_session = context.db_session
 
-CAS_USERNAME = os.getenv("CAS_USERNAME", "")
-CAS_PASSWORD = os.getenv("CAS_PASSWORD", "")
+    if progress and task_id:
+        progress.update(task_id, description="  [blue]Fix Images: Identifying missing photos...[/blue]")
 
+    t_client = await TrombINT.create()
 
-def cas_login():
-    session = requests.Session()
-    session.headers.update(
-        {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    # 1. Get students with photo URLs from DB
+    result = await db_session.execute(
+        select(Student).where(Student.profile_picture_path != "")
     )
-    r = session.get(CAS_LOGIN_URL, timeout=15)
-    r.raise_for_status()
-    for _ in range(10):
-        soup = BeautifulSoup(r.text, "html.parser")
-        if soup.find("input", type="password"):
-            form = soup.find("form")
-            action = form.get("action", "")
-            inputs = {
-                inp.get("name"): inp.get("value", "")
-                for inp in form.find_all("input")
-                if inp.get("name")
-            }
-            inputs["username"] = CAS_USERNAME
-            inputs["password"] = CAS_PASSWORD
-            next_url = urljoin(r.url, action) if action else r.url
-            r = session.post(next_url, data=inputs, allow_redirects=True)
-            continue
-        if "document.forms[0].submit()" in r.text:
-            form = soup.find("form")
-            if form:
-                action = form.get("action", "")
-                inputs = {
-                    inp.get("name"): inp.get("value", "")
-                    for inp in form.find_all("input")
-                    if inp.get("name")
-                }
-                r = session.post(urljoin(r.url, action), data=inputs)
-                r.raise_for_status()
-                continue
-        break
-    session.get(ETUDIANTS_URL)
-    print("✅ CAS login OK")
-    return session
+    students = result.scalars().all()
 
-
-async def main():
-    # 1. Get all students with a photo URL from DB
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(Student).where(Student.profile_picture_path != "")
-        )
-        students = result.scalars().all()
-
-    print(f"Total students with photo URL in DB: {len(students)}")
-
-    # 2. Find which ones are missing on disk
+    # 2. Identify missing ones
     missing = []
     for s in students:
         path = os.path.join(PROFILES_DIR, f"{s.trombint_id}.jpg")
         if not os.path.exists(path):
             missing.append(s)
 
-    print(f"Missing images on disk: {len(missing)}")
     if not missing:
-        print("Nothing to do!")
+        if progress and task_id:
+            progress.update(task_id, description="  [green]Fix Images: All photos present.[/green]", completed=1, total=1)
         return
 
-    for s in missing:
-        print(
-            f"  - {s.first_name} {s.last_name} ({s.trombint_id}) -> {s.profile_picture_path}"
-        )
+    if progress and task_id:
+        progress.update(task_id, description=f"  [blue]Fix Images: Downloading {len(missing)} missing photos...[/blue]", total=len(missing), completed=0)
 
-    # 3. Download them
-    session = cas_login()
+    delay = getattr(context, 'delay', 0.1)
+
+    # 3. Download
     for i, s in enumerate(missing, 1):
         dest = os.path.join(PROFILES_DIR, f"{s.trombint_id}.jpg")
         try:
-            headers = {"Referer": ETUDIANTS_URL}
-            res = session.get(s.profile_picture_path, headers=headers, timeout=10)
-            res.raise_for_status()
-            with open(dest, "wb") as f:
-                f.write(res.content)
-            print(f"  ✅ [{i}/{len(missing)}] Downloaded {s.trombint_id}.jpg")
-        except Exception as e:
-            print(f"  ❌ [{i}/{len(missing)}] Failed {s.trombint_id}: {e}")
-        time.sleep(0.3)
+            await t_client.download_image(s.profile_picture_path, dest)
+        except Exception:
+            pass
+        
+        if progress and task_id:
+            progress.update(task_id, advance=1)
+        
+        if delay > 0:
+            await asyncio.sleep(delay)
 
-    print("\nDone!")
+    if progress and task_id:
+        progress.update(task_id, description=f"  [green]Fix Images: Done.[/green]")
 
+async def main():
+    import getpass
+    username = input("Enter CAS Username: ")
+    password = getpass.getpass("Enter CAS Password: ")
+    cas_client = CASClient(service_url="https://trombi.imtbs-tsp.eu/etudiants.php")
+    await cas_client.login(username=username, password=password)
+    async with AsyncSessionLocal() as session:
+        class MockContext:
+            def __init__(self, cli, sess):
+                self.cas_client = cli
+                self.db_session = sess
+                self.progress = None
+                self.task_id = None
+        await fix_missing_images(MockContext(cas_client, session))
+        await session.commit()
 
 if __name__ == "__main__":
     asyncio.run(main())

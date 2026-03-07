@@ -2,8 +2,6 @@ import asyncio
 import os
 import sys
 
-# Ensure backend is in path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../backend/src")))
 
 from sqlmodel import select
 from core.auth import get_password_hash

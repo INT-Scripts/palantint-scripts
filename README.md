@@ -1,62 +1,44 @@
 # PalantINT Scripts 🎭
 
-Comprehensive OSINT and data ingestion pipeline for the PalantINT project. 
+Comprehensive OSINT and data ingestion pipeline for the PalantINT project.
 
-## Structure 🏗️
+## Unified Pipeline
+The scripts now use a shared `CASClient` and asynchronous networking for maximum efficiency.
 
-- `pyproject.toml`: Project configuration and dependencies.
-- `main.py`: Entry point for all scripts.
-- `src/palantint_scripts/`: Package containing the scripts:
-    - `scrape_all.py`: The master orchestration TUI.
-    - `create_admin.py`: Utility to create an initial admin user.
-    - `backfill.py`: Enrichment of student data.
-    - `scrape_trombint.py`: Scraper for the student directory.
-    - `scrape_clubs.py`: Scraper for student clubs.
-    - `import_agenda.py`: Importer for agenda scraps.
-    - `fix_images.py`: Utility to redownload missing profile pictures.
-    - `svg_processor.py`: Vector processing for building plans.
-    - `populate.py`: Seed database with default values.
-
-## Installation 📦
-
-It is recommended to use `uv`:
-
+### Installation
 ```bash
-cd scripts/
 uv sync
 ```
 
-## Usage 🚀
-
-All commands are accessible via the CLI:
-
-### 🎭 Master Pipeline (with TUI)
-Run the full scraping and synchronization sequence:
+### Usage
+#### 🎭 Master Pipeline (Scraping)
+Run all data synchronization steps with a granular progress UI:
 ```bash
 uv run palantint-scrape
 ```
-Add `--purge` as an argument to wipe the database before scraping.
+Add `--purge` to wipe the DB first.
 
-### 🔑 Create Admin User
+#### 🔑 Admin Setup
 ```bash
-uv run palantint-admin <username> <password>
+uv run palantint-admin <user> <pass>
 ```
 
-### 🗺️ Process Building SVGs
-Processes raw SVG building plans found in `data/scraps/input_svgs/` into active building plans in `data/assets/plans/`.
+#### 🚀 Blooket Bot Swarm
 ```bash
-uv run palantint-svg
+uv run palantint-blooket <GAME_CODE> <NAME>
 ```
 
-### 🐍 Legacy execution
-You can also run through `main.py`:
+#### 🖨️ Campus Printing
 ```bash
-uv run scripts/main.py
+uv run palantint-print list-webprint
+uv run palantint-print auto my_document.pdf
 ```
 
-## Environment Variables 🔐
-
-Ensure you have the following environment variables set if you need CAS-authenticated scraping:
-- `CAS_USERNAME`
-- `CAS_PASSWORD`
-- `DATABASE_URL` (optional, defaults to local Docker instance)
+## Integrated Packages
+This project integrates logic from:
+- `cas-connector`: Unified CAS authentication.
+- `trombint`: Student directory scraping.
+- `si-agenda`: Timetable synchronization.
+- `tsprint`: PaperCut printing integration.
+- `blooket-int`: Performance bot swarm.
+- `palantint-core`: Shared DB models.

@@ -6,14 +6,10 @@ import httpx
 from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# Ensure backend is in path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../backend/src")))
-
 from db.database import AsyncSessionLocal
 from db.models import Club
 
 URL = "https://bde-imtbs-tsp.fr/fr/associative/"
-
 
 async def fetch_html(url: str):
     async with httpx.AsyncClient() as client:
@@ -21,25 +17,34 @@ async def fetch_html(url: str):
         response.raise_for_status()
         return response.text
 
+async def scrape_clubs(context):
+    """
+    Standardized entry point using PipelineContext.
+    """
+    progress = context.progress
+    task_id = context.task_id
+    db_session = context.db_session
 
-async def scrape_clubs(session: AsyncSession = None):
-    print("Fetching BDE website...")
+    if progress and task_id:
+        progress.update(task_id, description="  [blue]Clubs: Fetching website...[/blue]")
+        
     html = await fetch_html(URL)
     soup = BeautifulSoup(html, "html.parser")
 
     clubs_data = []
     found_origins = set()
 
-    # BDE Clubs are linked in sections
-    for link in soup.find_all("a", href=True):
+    links = soup.find_all("a", href=True)
+    if progress and task_id:
+        progress.update(task_id, description="  [blue]Clubs: Parsing links...[/blue]", total=len(links), completed=0)
+
+    for link in links:
+        if progress and task_id: progress.update(task_id, advance=1)
         href = link["href"]
         if "/fr/associative/" in href and href.count("/") > 3:
-            # e.g., /fr/associative/bde/absinthe/
             parts = [p for p in href.split("/") if p]
             if len(parts) >= 3:
-                # e.g. ['fr', 'associative', 'bde', 'absinthe']
-                assoc_origin = parts[2].upper()  # 'BDE', 'ASINT', 'BDA'
-
+                assoc_origin = parts[2].upper()
                 name = link.text.strip()
                 if "-" in name:
                     name = name.split("-")[0].strip()
@@ -54,9 +59,7 @@ async def scrape_clubs(session: AsyncSession = None):
                     )
                     found_origins.add(assoc_origin)
 
-    # For every unique association origin, create a root club for the association itself
     for origin in found_origins:
-        # Avoid creating duplicates if there's already a club with EXACTLY the origin name
         if not any(c["name"] == origin for c in clubs_data):
             clubs_data.append(
                 {
@@ -66,37 +69,40 @@ async def scrape_clubs(session: AsyncSession = None):
                 }
             )
 
-    print(f"Scraped {len(clubs_data)} clubs/associations. Updating Database...")
+    if progress and task_id:
+        progress.update(task_id, description=f"  [blue]Clubs: Syncing {len(clubs_data)} clubs...[/blue]")
 
-    async def process_clubs(db_session: AsyncSession):
-        from sqlalchemy.dialects.postgresql import insert
+    from sqlalchemy.dialects.postgresql import insert
+    for club_data in clubs_data:
+        stmt = insert(Club).values(
+            name=club_data["name"],
+            association_of_origin=club_data["association_of_origin"],
+            description=club_data["description"]
+        )
+        upsert_stmt = stmt.on_conflict_do_update(
+            index_elements=["name"],
+            set_={
+                "association_of_origin": stmt.excluded.association_of_origin,
+                "description": stmt.excluded.description
+            }
+        )
+        await db_session.execute(upsert_stmt)
+    
+    await db_session.flush()
 
-        for club_data in clubs_data:
-            stmt = insert(Club).values(
-                name=club_data["name"],
-                association_of_origin=club_data["association_of_origin"],
-                description=club_data["description"]
-            )
+    if progress and task_id:
+        progress.update(task_id, description=f"  [green]Clubs: Done ({len(clubs_data)} clubs).[/green]")
 
-            upsert_stmt = stmt.on_conflict_do_update(
-                index_elements=["name"],
-                set_={
-                    "association_of_origin": stmt.excluded.association_of_origin,
-                    "description": stmt.excluded.description
-                }
-            )
-            await db_session.execute(upsert_stmt)
-
-        await db_session.commit()
-
-    if session:
-        await process_clubs(session)
-    else:
-        async with AsyncSessionLocal() as local_session:
-            await process_clubs(local_session)
-
-    print("Clubs database seeded.")
-
+async def main():
+    async with AsyncSessionLocal() as session:
+        class MockContext:
+            def __init__(self, sess):
+                self.db_session = sess
+                self.progress = None
+                self.task_id = None
+                self.cas_client = None
+        await scrape_clubs(MockContext(session))
+        await session.commit()
 
 if __name__ == "__main__":
-    asyncio.run(scrape_clubs())
+    asyncio.run(main())
