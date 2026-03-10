@@ -1,0 +1,141 @@
+import asyncio
+import os
+import httpx
+import json
+from typing import List, Optional
+from pydantic import BaseModel, ValidationError
+
+API_BASE_URL = os.getenv("CAL_MINET_URL", "https://cal.minet.net")
+ORGS_ENDPOINT = f"{API_BASE_URL}/api/organizations/"
+DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
+ASSETS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/assets/clubs"))
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(ASSETS_DIR, exist_ok=True)
+
+class OrgLinkSchema(BaseModel):
+    name: str
+    url: str
+
+class OrgSchema(BaseModel):
+    id: str
+    name: str
+    slug: Optional[str] = None
+    description: Optional[str] = None
+    logo_url: Optional[str] = None
+    type: Optional[str] = None
+    parent_id: Optional[str] = None
+    color_primary: Optional[str] = None
+    color_secondary: Optional[str] = None
+    organization_links: List[OrgLinkSchema] = []
+
+async def fetch_organizations() -> List[OrgSchema]:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(ORGS_ENDPOINT)
+        response.raise_for_status()
+        raw_data = response.json()
+        orgs = []
+        for item in raw_data:
+            try:
+                orgs.append(OrgSchema(**item))
+            except ValidationError as e:
+                print(f"Validation error for org {item.get('name', 'Unknown')}: {e}")
+        return orgs
+
+async def download_image(client: httpx.AsyncClient, url: str, slug: str, log=print) -> Optional[str]:
+    try:
+        if not url.startswith("http"):
+            url = f"{API_BASE_URL}{url}"
+        response = await client.get(url)
+        if response.status_code == 200:
+            content_type = response.headers.get("Content-Type", "")
+            ext = "png"
+            if "image/jpeg" in content_type: ext = "jpg"
+            elif "image/png" in content_type: ext = "png"
+            elif "image/svg+xml" in content_type: ext = "svg"
+            elif "image/webp" in content_type: ext = "webp"
+            elif "image/gif" in content_type: ext = "gif"
+            
+            filename = f"{slug}.{ext}"
+            filepath = os.path.join(ASSETS_DIR, filename)
+            with open(filepath, "wb") as f:
+                f.write(response.content)
+            return f"/api/assets/clubs/{filename}"
+    except Exception as e:
+        log(f"[red]Error downloading image {url}: {e}[/red]")
+    return None
+
+async def scrape_clubs(context):
+    """
+    Standardized entry point using PipelineContext.
+    Scrapes data from cal.minet.net API and saves to JSON.
+    """
+    progress = context.progress
+    task_id = context.task_id
+    delay = getattr(context, "delay", 0.2)
+    log = getattr(context, "log", print)
+
+    if progress and task_id:
+        progress.update(task_id, description="  [blue]Scraping Clubs: Connecting...[/blue]")
+        
+    try:
+        orgs = await fetch_organizations()
+        log(f"[green]✓ Fetched {len(orgs)} organizations from MiNET API.[/green]")
+    except Exception as e:
+        if progress and task_id:
+            progress.update(task_id, description=f"  [red]Scraping Clubs: API error: {e}[/red]")
+        log(f"[red]Clubs API Error: {e}[/red]")
+        raise e
+
+    if progress and task_id:
+        progress.update(task_id, description=f"  [blue]Scraping Clubs: Downloading assets...[/blue]", total=len(orgs), completed=0)
+
+    org_map = {org.id: org for org in orgs}
+    final_data = []
+
+    async with httpx.AsyncClient() as client:
+        for org in orgs:
+            if progress and task_id: progress.update(task_id, advance=1)
+            
+            association_of_origin = "Autre"
+            if org.parent_id and org.parent_id in org_map:
+                association_of_origin = org_map[org.parent_id].name
+            elif org.type == "association":
+                association_of_origin = "Bureau / Asso Centrale"
+                
+            local_logo_path = None
+            if org.logo_url and org.slug:
+                log(f"Scraping metadata & assets for [magenta]{org.name}[/magenta]...")
+                local_logo_path = await download_image(client, org.logo_url, org.slug, log)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+            final_data.append({
+                "name": org.name,
+                "slug": org.slug,
+                "description": org.description,
+                "logo_url": local_logo_path or org.logo_url,
+                "type": org.type,
+                "association_of_origin": association_of_origin,
+                "color_primary": org.color_primary,
+                "color_secondary": org.color_secondary,
+                "links": [{"name": l.name, "url": l.url} for l in org.organization_links]
+            })
+
+    output_path = os.path.join(DATA_DIR, "clubs.json")
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(final_data, f, indent=4, ensure_ascii=False)
+
+    if progress and task_id:
+        progress.update(task_id, description=f"  [green]Scraping Clubs: Done. Saved {len(final_data)} organizations.[/green]")
+
+async def main():
+    class MockContext:
+        def __init__(self):
+            self.progress = None
+            self.task_id = None
+            self.delay = 0.1
+            self.log = print
+    await scrape_clubs(MockContext())
+
+if __name__ == "__main__":
+    asyncio.run(main())

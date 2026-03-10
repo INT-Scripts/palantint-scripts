@@ -5,7 +5,7 @@ requires-python = ">=3.13"
 [[package]]
 name = "agendint"
 version = "0.1.0"
-source = { directory = "../int-libraries/packages/agendint" }
+source = { editable = "../int-libraries/packages/agendint" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "casint" },
@@ -19,7 +19,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.14.3" },
-    { name = "casint", directory = "../int-libraries/packages/casint" },
+    { name = "casint", editable = "../int-libraries/packages/casint" },
     { name = "ics", specifier = ">=0.7.2" },
     { name = "pydantic", specifier = ">=2.5.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
@@ -127,8 +127,8 @@ wheels = [
 
 [[package]]
 name = "backend"
-version = "0.1.0"
-source = { directory = "../backend" }
+version = "0.1.1"
+source = { editable = "../backend" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
@@ -205,7 +205,7 @@ wheels = [
 [[package]]
 name = "casint"
 version = "0.1.0"
-source = { directory = "../int-libraries/packages/casint" }
+source = { editable = "../int-libraries/packages/casint" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "httpx" },
@@ -683,16 +683,15 @@ dependencies = [
     { name = "sqlmodel" },
     { name = "svgpathtools" },
     { name = "trombint" },
-    { name = "tsprint" },
     { name = "unidecode" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "agendint", directory = "../int-libraries/packages/agendint" },
-    { name = "backend", directory = "../backend" },
+    { name = "agendint", editable = "../int-libraries/packages/agendint" },
+    { name = "backend", editable = "../backend" },
     { name = "beautifulsoup4" },
-    { name = "casint", directory = "../int-libraries/packages/casint" },
+    { name = "casint", editable = "../int-libraries/packages/casint" },
     { name = "httpx" },
     { name = "numpy" },
     { name = "opencv-python" },
@@ -703,8 +702,7 @@ requires-dist = [
     { name = "sqlalchemy" },
     { name = "sqlmodel" },
     { name = "svgpathtools" },
-    { name = "trombint", directory = "../int-libraries/packages/trombint" },
-    { name = "tsprint", directory = "../int-libraries/packages/tsprint" },
+    { name = "trombint", editable = "../int-libraries/packages/trombint" },
     { name = "unidecode" },
 ]
 
@@ -1126,7 +1124,7 @@ wheels = [
 [[package]]
 name = "trombint"
 version = "0.1.0"
-source = { directory = "../int-libraries/packages/trombint" }
+source = { editable = "../int-libraries/packages/trombint" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "casint" },
@@ -1137,24 +1135,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4" },
-    { name = "casint", directory = "../int-libraries/packages/casint" },
-    { name = "python-dotenv" },
-    { name = "requests" },
-]
-
-[[package]]
-name = "tsprint"
-version = "0.1.0"
-source = { directory = "../int-libraries/packages/tsprint" }
-dependencies = [
-    { name = "beautifulsoup4" },
-    { name = "python-dotenv" },
-    { name = "requests" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "beautifulsoup4" },
+    { name = "casint", editable = "../int-libraries/packages/casint" },
     { name = "python-dotenv" },
     { name = "requests" },
 ]

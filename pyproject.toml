@@ -21,23 +21,20 @@ dependencies = [
     "casint",
     "trombint",
     "agendint",
-    "tsprint",
     "backend",
 ]
 
 [project.scripts]
-palantint-scrape = "palantint_scripts.scrape_all:main"
-palantint-admin = "palantint_scripts.create_admin:main"
-palantint-svg = "palantint_scripts.svg_processor:main"
-palantint-blooket = "palantint_scripts.blooket:main"
-palantint-print = "palantint_scripts.printing:main"
+palantint = "palantint_scripts.cli:main"
+palantint-sync = "palantint_scripts.sync:main"
+palantint-admin = "palantint_scripts.admin:main"
+palantint-map = "palantint_scripts.map_gen:main"
 
 [tool.uv.sources]
-backend = { path = "../backend" }
-casint = { path = "../int-libraries/packages/casint" }
-trombint = { path = "../int-libraries/packages/trombint" }
-agendint = { path = "../int-libraries/packages/agendint" }
-tsprint = { path = "../int-libraries/packages/tsprint" }
+backend = { path = "../backend", editable = true }
+casint = { path = "../int-libraries/packages/casint", editable = true }
+trombint = { path = "../int-libraries/packages/trombint", editable = true }
+agendint = { path = "../int-libraries/packages/agendint", editable = true }
 
 [build-system]
 requires = ["hatchling"]
