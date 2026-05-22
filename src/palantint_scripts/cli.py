@@ -5,43 +5,54 @@ import questionary
 from rich.console import Console
 from rich.panel import Panel
 from rich import box
-from .sync import custom_style
+from .sync import custom_style, apply_nav_keys
 
 console = Console()
 
 async def interactive_menu():
-    console.print()
-    console.print(Panel.fit(
-        "[bold white]PalantINT[/bold white] [blue]Unified Command Center[/blue]",
-        border_style="blue",
-        box=box.HEAVY,
-    ))
-    console.print()
+    while True:
+        console.print()
+        console.print(Panel.fit(
+            "[bold white]PalantINT[/bold white] [blue]Unified Command Center[/blue]",
+            border_style="blue",
+            box=box.HEAVY,
+        ))
+        console.print()
 
-    choice = await questionary.select(
-        "What would you like to do?",
-        choices=[
-            questionary.Choice("🔄 ETL Data Pipeline (Scraping & Sync)", value="sync"),
-            questionary.Choice("🔑 Admin Management (Manage admin user)", value="admin"),
-            questionary.Choice("🗺️  Map Processing (Process floors SVG)", value="map"),
-        ],
-        style=custom_style
-    ).ask_async()
+        choice = await apply_nav_keys(questionary.select(
+            "What would you like to do?",
+            choices=[
+                questionary.Choice("🔄 ETL Data Pipeline (Scraping & Sync)", value="sync"),
+                questionary.Choice("🔑 Admin Management (Manage admin user)", value="admin"),
+                questionary.Choice("🗺️  Map Processing (Process floors SVG)", value="map"),
+                questionary.Choice("📦 3D Asset Pipeline (Process & Align GLTF)", value="3d"),
+                questionary.Choice("❌ Exit", value="exit"),
+            ],
+            style=custom_style
+        )).ask_async()
 
-    if choice == "sync":
-        from .sync import run_pipeline
-        await run_pipeline()
-    
-    elif choice == "admin":
-        from .admin import create_first_admin
-        username = await questionary.text("Enter Admin Username:", style=custom_style).ask_async()
-        password = await questionary.password("Enter Admin Password:", style=custom_style).ask_async()
-        if username and password:
-            await create_first_admin(username, password)
-            
-    elif choice == "map":
-        from .map_gen import main as map_main
-        map_main()
+        if choice == "sync":
+            from .sync import run_pipeline
+            await run_pipeline()
+        
+        elif choice == "admin":
+            from .admin import create_first_admin
+            username = await questionary.text("Enter Admin Username:", style=custom_style).ask_async()
+            password = await questionary.password("Enter Admin Password:", style=custom_style).ask_async()
+            if username and password:
+                await create_first_admin(username, password)
+                
+        elif choice == "map":
+            from .map_gen import main as map_main
+            map_main()
+
+        elif choice == "3d":
+            from .process_3d import process_3d_assets
+            process_3d_assets()
+        
+        elif choice in ("exit", "BACK", None):
+            console.print("\n[dim]Goodbye.[/dim]")
+            break
 
 def main():
     parser = argparse.ArgumentParser(
@@ -65,6 +76,9 @@ def main():
 
     # Map
     map_parser = subparsers.add_parser("map", help="Generate interactive floor plans (SVG processing)")
+
+    # 3D
+    three_d_parser = subparsers.add_parser("3d", help="Process and align 3D tiles (GLTF assets)")
 
     args = parser.parse_args()
 
@@ -91,6 +105,10 @@ def main():
     elif args.command == "map":
         from .map_gen import main as map_main
         map_main()
+
+    elif args.command == "3d":
+        from .process_3d import process_3d_assets
+        process_3d_assets()
 
     else:
         parser.print_help()

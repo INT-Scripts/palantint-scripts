@@ -28,18 +28,27 @@ class OrgSchema(BaseModel):
     color_secondary: Optional[str] = None
     organization_links: List[OrgLinkSchema] = []
 
-async def fetch_organizations() -> List[OrgSchema]:
-    async with httpx.AsyncClient() as client:
-        response = await client.get(ORGS_ENDPOINT)
-        response.raise_for_status()
-        raw_data = response.json()
-        orgs = []
-        for item in raw_data:
-            try:
-                orgs.append(OrgSchema(**item))
-            except ValidationError as e:
-                print(f"Validation error for org {item.get('name', 'Unknown')}: {e}")
-        return orgs
+async def fetch_organizations(log=print) -> List[OrgSchema]:
+    # Retry logic for flaky school network
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(ORGS_ENDPOINT)
+                response.raise_for_status()
+                raw_data = response.json()
+                orgs = []
+                for item in raw_data:
+                    try:
+                        orgs.append(OrgSchema(**item))
+                    except ValidationError as e:
+                        log(f"[yellow]Validation warning for {item.get('name')}[/yellow]")
+                return orgs
+        except Exception as e:
+            if attempt < 2:
+                log(f"[yellow]MiNET API Attempt {attempt+1} failed ({e}). Retrying...[/yellow]")
+                await asyncio.sleep(1)
+            else: raise e
+    return []
 
 async def download_image(client: httpx.AsyncClient, url: str, slug: str, log=print) -> Optional[str]:
     try:
@@ -64,21 +73,18 @@ async def download_image(client: httpx.AsyncClient, url: str, slug: str, log=pri
         log(f"[red]Error downloading image {url}: {e}[/red]")
     return None
 
-async def scrape_clubs(context):
+async def scrape_clubs(progress=None, task_id=None, config: dict = None, log=print):
     """
-    Standardized entry point using PipelineContext.
+    Standardized entry point using config dict.
     Scrapes data from cal.minet.net API and saves to JSON.
     """
-    progress = context.progress
-    task_id = context.task_id
-    delay = getattr(context, "delay", 0.2)
-    log = getattr(context, "log", print)
+    delay = config.get("delay", 0.2) if config else 0.2
 
     if progress and task_id:
         progress.update(task_id, description="  [blue]Scraping Clubs: Connecting...[/blue]")
         
     try:
-        orgs = await fetch_organizations()
+        orgs = await fetch_organizations(log=log)
         log(f"[green]✓ Fetched {len(orgs)} organizations from MiNET API.[/green]")
     except Exception as e:
         if progress and task_id:
@@ -129,13 +135,7 @@ async def scrape_clubs(context):
         progress.update(task_id, description=f"  [green]Scraping Clubs: Done. Saved {len(final_data)} organizations.[/green]")
 
 async def main():
-    class MockContext:
-        def __init__(self):
-            self.progress = None
-            self.task_id = None
-            self.delay = 0.1
-            self.log = print
-    await scrape_clubs(MockContext())
+    await scrape_clubs(config={"delay": 0.1})
 
 if __name__ == "__main__":
     asyncio.run(main())

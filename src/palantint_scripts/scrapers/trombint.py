@@ -9,9 +9,9 @@ DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../
 os.makedirs(DATA_DIR, exist_ok=True)
 OUTPUT_PATH = os.path.join(DATA_DIR, "students.json")
 
-async def scrape_trombint(cas_client: CASClient, progress=None, task_id=None, delay: float = 0.1, context=None):
-    log = getattr(context, "log", print) if context else print
-    concurrency = getattr(context, "concurrency", 5) if context else 5
+async def scrape_trombint(cas_client: CASClient, progress=None, task_id=None, config: dict = None, log=print):
+    concurrency = config.get("concurrency", 5)
+    delay = config.get("delay", 0.1)
     
     if progress and task_id:
         progress.update(task_id, description="  [blue]Scraping Students: Initializing session...[/blue]")
@@ -32,14 +32,17 @@ async def scrape_trombint(cas_client: CASClient, progress=None, task_id=None, de
     schools = ["IMT-BS", "TSP"]
     live_list = {}
     
+    school_map = {"IMT-BS": "IMT-BS", "TSP": "Télécom SudParis"}
+    
     if progress and task_id:
         progress.update(task_id, description="  [blue]Scraping Students: Syncing directory lists...[/blue]", total=len(schools), completed=0)
 
-    for school in schools:
+    for school_key in schools:
+        school_full = school_map.get(school_key, school_key)
         if progress and task_id:
-            progress.update(task_id, description=f"  [blue]Scraping Students: Fetching {school}...[/blue]")
+            progress.update(task_id, description=f"  [blue]Scraping Students: Fetching {school_full}...[/blue]")
         
-        data = {"etu[user]": "", "etu[ecole]": school, "etu[annee]": ""}
+        data = {"etu[user]": "", "etu[ecole]": school_key, "etu[annee]": ""}
         try:
             async with (await t_client.get_client()) as client:
                 resp = await client.post(ETUDIANTS_URL, data=data)
@@ -47,18 +50,27 @@ async def scrape_trombint(cas_client: CASClient, progress=None, task_id=None, de
                 for s in t_client.parse_students(resp.text):
                     if "uid" in s:
                         uid = s["uid"]
-                        # Extract ecole/promo from details list if present
-                        details = s.get("details", [])
-                        if len(details) >= 1: s["ecole"] = details[0]
-                        if len(details) >= 2: s["promo"] = details[1]
+                        # Set school immediately from context
+                        s["ecole"] = school_full
                         
-                        # Merge with cache to preserve any existing info
+                        # Extract ecole/promo from details list if present (redundant but safe)
+                        details = s.get("details", [])
+                        if len(details) >= 1: 
+                             # If the first detail is actually the school, let it override or keep it
+                             if "année" not in details[0]: s["ecole"] = details[0]
+                        if len(details) >= 2: s["promo"] = details[1]
+                        elif len(details) >= 1 and "année" in details[0]: s["promo"] = details[0]
+                        
+                        # Fallback to cache for missing fields, but live data always wins
                         if uid in cached_students:
-                            s.update({k: v for k, v in cached_students[uid].items() if v and k != "details"})
+                             # ... 
+                            for k, v in cached_students[uid].items():
+                                if v and not s.get(k):
+                                    s[k] = v
                         
                         live_list[uid] = s
         except Exception as e:
-            log(f"[red]TrombINT Error ({school}): {e}[/red]")
+            log(f"[red]TrombINT Error ({school_key}): {e}[/red]")
         
         if progress and task_id: progress.update(task_id, advance=1)
         if delay > 0: await asyncio.sleep(delay)

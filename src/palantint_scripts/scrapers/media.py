@@ -41,10 +41,10 @@ async def download_image(client: httpx.AsyncClient, url: str, name: str, directo
     except: pass
     return False
 
-async def scrape_media(cas_client: CASClient, progress=None, task_id=None, delay: float = 0.1, context=None):
-    log = getattr(context, "log", print) if context else print
-    concurrency = getattr(context, "concurrency", 5) if context else 5
-    
+async def scrape_media(cas_client: CASClient, progress=None, task_id=None, config: dict = None, log=print):
+    concurrency = config.get("concurrency", 5) if config else 5
+    delay = config.get("delay", 0.1) if config else 0.1
+
     # 1. Collect targets from JSON scraps (Decoupled from DB)
     targets = [] # List of (url, filename, directory, referer)
     
