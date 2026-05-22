@@ -11,36 +11,71 @@ EXPORT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.
 
 async def load_apartments(db_session: AsyncSession, progress=None, task_id=None, log=print):
     """
-    Restores apartment data from the vault (apartments.json).
+    Restores apartment data from the vault (apartments.json) and loads
+    Maisel room details from logements.json into the database.
     """
     json_path = os.path.join(EXPORT_DIR, "apartments.json")
-    
-    if not os.path.exists(json_path):
-        if progress and task_id:
-            progress.update(task_id, description="  [yellow]Load Apartments: No vault data found. Skipping.[/yellow]", completed=1, total=1)
-        return
+    scraps_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
+    logements_path = os.path.join(scraps_dir, "logements.json")
 
-    log(f"Restoring precision housing map from [magenta]apartments.json[/magenta]...")
-    with open(json_path, "r", encoding="utf-8") as f:
-        mapping = json.load(f)
-        
-    if progress and task_id:
-        progress.update(task_id, description=f"  [blue]Load Apartments: Restoring {len(mapping)} mappings...[/blue]", total=len(mapping), completed=0)
-        
-    matched = 0
-    for tid, apt_num in mapping.items():
-        result = await db_session.execute(select(Student).where(Student.trombint_id == tid))
-        student = result.scalars().first()
-        if student:
-            # We only update if the current field is empty to avoid overwriting newer scrapes
-            # OR we can assume vault data is higher authority
-            student.apartment = str(apt_num)
-            matched += 1
-        if progress and task_id: progress.update(task_id, advance=1)
-        
+    # 1. Load Student -> Apartment Mappings
+    if os.path.exists(json_path):
+        log(f"Restoring precision housing map from [magenta]apartments.json[/magenta]...")
+        with open(json_path, "r", encoding="utf-8") as f:
+            mapping = json.load(f)
+            
+        if progress and task_id:
+            progress.update(task_id, description=f"  [blue]Load Apartments: Restoring {len(mapping)} mappings...[/blue]", total=len(mapping), completed=0)
+            
+        matched = 0
+        for tid, apt_num in mapping.items():
+            result = await db_session.execute(select(Student).where(Student.trombint_id == tid))
+            student = result.scalars().first()
+            if student:
+                student.apartment = str(apt_num)
+                matched += 1
+            if progress and task_id: progress.update(task_id, advance=1)
+            
+        log(f"Restored {matched}/{len(mapping)} housing mappings.")
+    else:
+        log("No vault housing mapping found. Skipping mapping.")
+
+    # 2. Load Maisel Room Details into database
+    if os.path.exists(logements_path):
+        from db.models import ApartmentDetail
+        log(f"Loading room details from [magenta]logements.json[/magenta]...")
+        with open(logements_path, "r", encoding="utf-8") as f:
+            logements = json.load(f)
+
+        if progress and task_id:
+            progress.update(task_id, description=f"  [blue]Load Apartments: Saving {len(logements)} room details...[/blue]", total=len(logements), completed=0)
+
+        for room_id, details in logements.items():
+            result = await db_session.execute(select(ApartmentDetail).where(ApartmentDetail.id == str(room_id)))
+            apt_detail = result.scalars().first()
+            if not apt_detail:
+                apt_detail = ApartmentDetail(id=str(room_id))
+                db_session.add(apt_detail)
+
+            apt_detail.building = details.get("Bâtiment", "")
+            apt_detail.floor = details.get("Etage", "")
+            apt_detail.type = details.get("Type")
+            apt_detail.surface = details.get("Superficie")
+            apt_detail.price = details.get("Tarif")
+            apt_detail.alloc_boursier = details.get("Allocation boursier")
+            apt_detail.alloc_non_boursier = details.get("Allocation non boursier")
+            apt_detail.req_b = int(details.get("_req_b", 0))
+            apt_detail.req_e = str(details.get("_req_e", ""))
+            
+            if progress and task_id: progress.update(task_id, advance=1)
+            
+        log(f"Loaded details for {len(logements)} apartments.")
+    else:
+        log("No lodging scraps data (logements.json) found. Skipping room details.")
+
     await db_session.flush()
     if progress and task_id:
-        progress.update(task_id, description=f"  [green]Load Apartments: Restored {matched}/{len(mapping)} mappings.[/green]")
+        progress.update(task_id, description="  [green]Load Apartments: Done.[/green]")
 
 async def main():
     async with AsyncSessionLocal() as session:
@@ -48,4 +83,4 @@ async def main():
         await session.commit()
 
 if __name__ == "__main__":
-    asyncio.run(load_apartments())
+    asyncio.run(main())

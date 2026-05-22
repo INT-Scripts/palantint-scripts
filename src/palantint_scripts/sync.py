@@ -84,7 +84,7 @@ PIPELINE_DOMAINS = [
     {"id": "groupes", "name": "Group Topologies", "scraper": {"name": "Scraping Groups", "module": "palantint_scripts.scrapers.groupes", "func": "scrape_groupes", "needs_cas": True}, "loader": {"name": "Update Groups", "module": "palantint_scripts.loaders.groupes", "func": "load_groupes", "needs_db": True}},
     {"id": "agenda", "name": "Timetables", "scraper": {"name": "Scraping Schedules", "module": "palantint_scripts.scrapers.agenda", "func": "scrape_agenda", "needs_cas": True}, "loader": {"name": "Update Schedules", "module": "palantint_scripts.loaders.agenda", "func": "load_agenda", "needs_db": True}},
     {"id": "media", "name": "Media Assets", "scraper": {"name": "Harvesting Media", "module": "palantint_scripts.scrapers.media", "func": "scrape_media", "needs_cas": True}},
-    {"id": "apartments", "name": "Apartments", "loader": {"name": "Update Apartments", "module": "palantint_scripts.loaders.apartments", "func": "load_apartments", "needs_db": True}}
+    {"id": "apartments", "name": "Apartments", "scraper": {"name": "Scraping Apartments", "module": "palantint_scripts.scrapers.maisel", "func": "scrape_maisel", "needs_cas": True}, "loader": {"name": "Update Apartments", "module": "palantint_scripts.loaders.apartments", "func": "load_apartments", "needs_db": True}}
 ]
 
 # ── Step Definitions ─────────────────────────────────────────────────────────

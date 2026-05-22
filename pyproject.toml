@@ -20,6 +20,7 @@ dependencies = [
     "questionary",
     "casint",
     "trombint",
+    "maiselint",
     "agendint",
     "backend",
 ]
@@ -34,6 +35,7 @@ palantint-map = "palantint_scripts.map_gen:main"
 backend = { path = "../backend", editable = true }
 casint = { path = "../int-libraries/packages/casint", editable = true }
 trombint = { path = "../int-libraries/packages/trombint", editable = true }
+maiselint = { path = "../int-libraries/packages/maiselint", editable = true }
 agendint = { path = "../int-libraries/packages/agendint", editable = true }
 
 [build-system]
