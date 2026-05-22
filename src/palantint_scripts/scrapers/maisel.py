@@ -33,7 +33,7 @@ async def scrape_maisel(cas_client: CASClient, progress=None, task_id=None, conf
             progress.update(task_id, description=f"  [blue]Scraping Apartments: {msg}...[/blue]", completed=pct, total=100)
 
     try:
-        apartments = await client.get_all_apartments(progress_callback=info_progress, delay=delay)
+        apartments = await client.get_all_apartments(progress_callback=info_progress, delay=delay, config=config)
         with open(logements_path, "w", encoding="utf-8") as f:
             json.dump(apartments, f, ensure_ascii=False, indent=4)
         log(f"Apartment info saved to {logements_path}")
@@ -50,7 +50,7 @@ async def scrape_maisel(cas_client: CASClient, progress=None, task_id=None, conf
             progress.update(task_id, description=f"  [blue]Scraping Apartments: {msg}...[/blue]", completed=pct, total=100)
 
     try:
-        await client.download_all_plans(output_dir=PLANS_DIR, progress_callback=plan_progress, delay=delay)
+        await client.download_all_plans(output_dir=PLANS_DIR, progress_callback=plan_progress, delay=delay, config=config)
         log(f"Floor plans downloaded to {PLANS_DIR}")
     except Exception as e:
         log(f"[red]Error downloading floor plans: {e}[/red]")

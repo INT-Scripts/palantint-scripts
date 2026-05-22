@@ -8,7 +8,7 @@ from trombint.client import TrombINT, ETUDIANTS_URL
 # Paths
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
 SCRAPS_DIR = os.path.join(BASE_DIR, "data/scraps")
-PROFILES_DIR = os.path.join(BASE_DIR, "data/assets/profiles")
+PROFILES_DIR = os.path.join(BASE_DIR, "data/private_assets/profiles")
 LOGOS_DIR = os.path.join(BASE_DIR, "data/assets/logos")
 
 os.makedirs(PROFILES_DIR, exist_ok=True)
