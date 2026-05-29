@@ -7,16 +7,16 @@ from casint import CASClient
 
 logger = logging.getLogger("palantint.scrapers.maisel")
 
-SCRAPS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
+SCRAP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scrap"))
 PLANS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/assets/plans"))
 
 async def scrape_maisel(cas_client: CASClient, progress=None, task_id=None, config: dict = None, log=print):
     delay = config.get("delay", 0.5) if config else 0.5
     
-    os.makedirs(SCRAPS_DIR, exist_ok=True)
+    os.makedirs(SCRAP_DIR, exist_ok=True)
     os.makedirs(PLANS_DIR, exist_ok=True)
     
-    logements_path = os.path.join(SCRAPS_DIR, "logements.json")
+    logements_path = os.path.join(SCRAP_DIR, "logements.json")
     
     if progress and task_id:
         progress.update(task_id, description="  [blue]Scraping Apartments: Initializing session...[/blue]")
