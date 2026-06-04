@@ -9,7 +9,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.dialects.postgresql import insert
 
 from db.database import AsyncSessionLocal
-from db.models import Student, Club, StudentClub
+from db.models import Student, ClassGroup, StudentClassGroup
 from palantint_scripts.utils import normalize_name
 
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
@@ -157,20 +157,20 @@ async def load_groupes(db_session: AsyncSession, progress=None, task_id=None, lo
         if not display_name:
             display_name = norm_name.upper()
         
-        # Upsert Club
-        stmt = insert(Club).values(name=display_name, type="Classe", association_of_origin="Scolarité")
-        upsert_stmt = stmt.on_conflict_do_update(index_elements=["name"], set_={"type": "Classe"}).returning(Club.id)
+        # Upsert ClassGroup
+        stmt = insert(ClassGroup).values(name=display_name)
+        upsert_stmt = stmt.on_conflict_do_update(index_elements=["name"], set_={"name": display_name}).returning(ClassGroup.id)
         result = await db_session.execute(upsert_stmt)
-        club_id = result.scalar_one()
+        class_group_id = result.scalar_one()
 
         # Sync Members
-        await db_session.execute(delete(StudentClub).where(StudentClub.club_id == club_id))
+        await db_session.execute(delete(StudentClassGroup).where(StudentClassGroup.class_group_id == class_group_id))
         if student_ids:
             new_memberships = [
-                {"student_id": sid, "club_id": club_id, "role": "Membre", "is_mandat": False}
+                {"student_id": sid, "class_group_id": class_group_id, "role": "Membre"}
                 for sid in student_ids
             ]
-            await db_session.execute(insert(StudentClub), new_memberships)
+            await db_session.execute(insert(StudentClassGroup), new_memberships)
         
         log(f"Synced [magenta]{display_name}[/magenta]: {len(student_ids)} members (Hierarchy Level).")
         if progress and task_id: progress.update(task_id, advance=1)
