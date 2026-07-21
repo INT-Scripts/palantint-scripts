@@ -54,11 +54,23 @@ async def interactive_menu():
             console.print("\n[dim]Goodbye.[/dim]")
             break
 
+async def run_admin(args):
+    from .admin import create_first_admin
+    username = args.username
+    password = args.password
+    if not username:
+        username = await questionary.text("Enter Admin Username:", style=custom_style).ask_async()
+    if not password:
+        password = await questionary.password("Enter Admin Password:", style=custom_style).ask_async()
+    if username and password:
+        await create_first_admin(username, password)
+
 def main():
     parser = argparse.ArgumentParser(
         description="PalantINT — Unified Command Line Interface",
         prog="palantint"
     )
+    parser.add_argument("--log-file", help="Path to write log output")
     subparsers = parser.add_subparsers(dest="command", help="Operational commands")
 
     # Sync
@@ -82,6 +94,24 @@ def main():
 
     args = parser.parse_args()
 
+    # Redirection to log-file if supplied
+    if args.log_file:
+        try:
+            log_file_obj = open(args.log_file, "a", encoding="utf-8")
+            sys.stdout = log_file_obj
+            sys.stderr = log_file_obj
+            
+            # Configure console file target
+            global console
+            console.file = log_file_obj
+            
+            # Also import and patch sync's console object
+            from .sync import console as sync_console
+            sync_console.file = log_file_obj
+        except Exception as e:
+            sys.stderr.write(f"Error opening log file {args.log_file}: {e}\n")
+            sys.exit(1)
+
     if args.command is None and len(sys.argv) == 1:
         # Start interactive mode
         try:
@@ -93,14 +123,10 @@ def main():
     # Non-interactive logic
     if args.command == "sync":
         from .sync import run_pipeline
-        asyncio.run(run_pipeline())
+        asyncio.run(run_pipeline(args))
 
     elif args.command == "admin":
-        from .admin import create_first_admin
-        if not args.username or not args.password:
-            console.print("[red]Error: Username and Password required for CLI admin command.[/red]")
-            return
-        asyncio.run(create_first_admin(args.username, args.password))
+        asyncio.run(run_admin(args))
 
     elif args.command == "map":
         from .map_gen import main as map_main

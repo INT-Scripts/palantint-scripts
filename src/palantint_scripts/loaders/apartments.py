@@ -19,26 +19,13 @@ async def load_apartments(db_session: AsyncSession, progress=None, task_id=None,
     logements_path = os.path.join(scrap_dir, "logements.json")
 
     # 1. Load Student -> Apartment Mappings
-    if os.path.exists(json_path):
-        log(f"Restoring precision housing map from [magenta]apartments.json[/magenta]...")
-        with open(json_path, "r", encoding="utf-8") as f:
-            mapping = json.load(f)
-            
-        if progress and task_id:
-            progress.update(task_id, description=f"  [blue]Load Apartments: Restoring {len(mapping)} mappings...[/blue]", total=len(mapping), completed=0)
-            
-        matched = 0
-        for tid, apt_num in mapping.items():
-            result = await db_session.execute(select(Student).where(Student.trombint_id == tid))
-            student = result.scalars().first()
-            if student:
-                student.apartment = str(apt_num)
-                matched += 1
-            if progress and task_id: progress.update(task_id, advance=1)
-            
-        log(f"Restored {matched}/{len(mapping)} housing mappings.")
-    else:
-        log("No vault housing mapping found. Skipping mapping.")
+    if not os.path.exists(json_path):
+        log(f"  [red]Critical Error: [magenta]apartments.json[/magenta] not found in vault (required).[/red]")
+        raise FileNotFoundError(f"Required vault file missing: {json_path}")
+
+    log(f"Restoring precision housing map from [magenta]apartments.json[/magenta]...")
+    with open(json_path, "r", encoding="utf-8") as f:
+        mapping = json.load(f)
 
     # 2. Load Maisel Room Details into database
     if os.path.exists(logements_path):

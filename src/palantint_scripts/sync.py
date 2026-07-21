@@ -14,7 +14,7 @@ import questionary
 from dataclasses import dataclass, field
 from typing import Optional, Callable, List, Any, Dict
 
-from casint import CASClient
+from casint import AsyncCASClient
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
@@ -58,6 +58,7 @@ class FlowState:
     delay: float = 0.2
     concurrency: int = 5
     full_sync: bool = False
+    anchor_vault: bool = True
 
     def to_config(self) -> dict:
         """Flattens state into the unified config dict for scrapers."""
@@ -71,7 +72,7 @@ class FlowState:
 
 @dataclass
 class PipelineContext:
-    cas_client: Optional[CASClient]
+    cas_client: Optional[AsyncCASClient]
     db_session: Optional[AsyncSession]
     progress: Progress
     task_id: int
@@ -142,7 +143,7 @@ async def step_agenda_config(state: FlowState):
         "Schedule Depth:",
         choices=[
             questionary.Choice("Standard (Next 3 months)", value="all"),
-            questionary.Choice("Quick (Next 2 weeks only)", value="quick"),
+            questionary.Choice("Quick (Next 1 month)", value="quick"),
             questionary.Choice("Targeted ID", value="specific"),
         ],
         style=custom_style,
@@ -201,6 +202,19 @@ async def step_execution_mode(state: FlowState):
     state.full_sync = choice
     return "NEXT"
 
+async def step_vault_config(state: FlowState):
+    if state.phase != "load_only": return "SKIP"
+    choice = await apply_nav_keys(questionary.confirm(
+        "Anchor Identities? (Restore UUIDs from vault/backups)",
+        default=True,
+        style=custom_style,
+        instruction="[Left/Esc: Back]"
+    )).ask_async()
+    if choice is None: return "EXIT"
+    if choice == "__BACK__": return "BACK"
+    state.anchor_vault = choice
+    return "NEXT"
+
 # ── Engine ──────────────────────────────────────────────────────────────────
 
 async def run_step_async(step_info, ctx: PipelineContext):
@@ -235,37 +249,56 @@ async def run_step_async(step_info, ctx: PipelineContext):
         ctx.progress.update(ctx.task_id, description=f"[red]  {step_info['name']}: Failed![/red]", completed=1, total=1)
         return {"name": step_info["name"], "status": "❌ Failed", "reason": str(e)[:60]}
 
-async def run_pipeline():
+async def run_pipeline(args=None):
     db_session, db_context, cas_client = None, None, None
     results = []
     try:
         console.print(Panel.fit("[bold white]PalantINT[/bold white] [blue]Data Synchronization[/blue]\n[dim]Synchronizing registry identities and OSINT vaults.[/dim]", border_style="blue", box=box.HEAVY))
         
-        # ── 1. Linear Wizard Flow with History Stack ───────────────────────
+        # ── 1. Flow Configuration (Interactive Wizard or CLI Arguments) ──────
         state = FlowState()
-        steps = [
-            step_select_phase,
-            step_db_strategy,
-            step_select_domains,
-            step_agenda_config,
-            step_velocity,
-            step_execution_mode
-        ]
         
-        history = []
-        idx = 0
-        while idx < len(steps):
-            res = await steps[idx](state)
-            if res == "EXIT": return
-            if res == "NEXT":
-                history.append(idx)
-                idx += 1
-            elif res == "BACK":
-                if not history: return # Back out to main menu
-                idx = history.pop()
-            elif res == "SKIP":
-                idx += 1
-            if idx < 0: return
+        if args is not None:
+            # Non-interactive CLI Argument Mapping
+            if args.export:
+                state.phase = "export_only"
+            elif args.load:
+                state.phase = "load_only"
+            else:
+                state.phase = "scrape_only"
+                
+            state.db_strategy = "purge" if args.purge else "update"
+            state.selected_ids = [d["id"] for d in PIPELINE_DOMAINS]
+            state.agenda_mode = "all"
+            state.delay = 0.2
+            state.concurrency = 5
+            state.full_sync = args.hydrate
+        else:
+            # Interactive Menu Flow
+            steps = [
+                step_select_phase,
+                step_db_strategy,
+                step_select_domains,
+                step_agenda_config,
+                step_velocity,
+                step_execution_mode,
+                step_vault_config
+            ]
+            
+            history = []
+            idx = 0
+            while idx < len(steps):
+                res = await steps[idx](state)
+                if res == "EXIT": return
+                if res == "NEXT":
+                    history.append(idx)
+                    idx += 1
+                elif res == "BACK":
+                    if not history: return # Back out to main menu
+                    idx = history.pop()
+                elif res == "SKIP":
+                    idx += 1
+                if idx < 0: return
 
         # ── 2. Task Mapping ──────────────────────────────────────────────────
         mode_scrape, mode_load, mode_export = state.phase == "scrape_only", state.phase == "load_only", state.phase == "export_only"
@@ -275,9 +308,11 @@ async def run_pipeline():
         if mode_load:
             if state.db_strategy == "purge": active_loaders.append({"name": "Wipe Database", "module": None})
             active_loaders.append({"name": "Setup Infrastructure", "module": "db.seed", "func": "seed_default_data"})
-            active_loaders.append({"name": "Anchor Identities", "module": "palantint_scripts.loaders.vault", "func": "anchor_identities"})
+            if state.anchor_vault:
+                active_loaders.append({"name": "Anchor Identities", "module": "palantint_scripts.loaders.vault", "func": "anchor_identities"})
             active_loaders.extend([d["loader"] for d in PIPELINE_DOMAINS if d["id"] in state.selected_ids and "loader" in d])
-            active_loaders.append({"name": "Restore Research", "module": "palantint_scripts.loaders.vault", "func": "restore_research"})
+            if state.anchor_vault:
+                active_loaders.append({"name": "Restore Research", "module": "palantint_scripts.loaders.vault", "func": "restore_research"})
         
         if mode_export: active_loaders.append({"name": "Export Database", "module": None})
 
@@ -285,28 +320,56 @@ async def run_pipeline():
         needs_cas = any(s.get("needs_cas") for s in active_scrapers + active_loaders)
         config = state.to_config() # Initialize config here to pass credentials
         if needs_cas:
-            while not cas_client:
-                user = await questionary.text("Enter Username:", style=custom_style).ask_async()
-                if user is None: return # Allow cancel
-                pw = await questionary.password("Enter Password:", style=custom_style).ask_async()
-                if pw is None: return # Allow cancel
-                console.print("\n[blue]ℹ Authenticating...[/blue]")
+            # Try credentials from environment / .env first
+            user = os.getenv("CAS_USERNAME")
+            pw = os.getenv("CAS_PASSWORD")
+            
+            if user and pw:
+                console.print("\n[blue]ℹ Authenticating automatically using environment credentials...[/blue]")
                 try:
-                    client = CASClient(service_url="https://cas6.imtbs-tsp.eu/cas/login")
-                    await client.login(username=user, password=pw, delay=state.delay)
+                    client = AsyncCASClient("cas6")
+                    await client.login(username=user, password=pw)
                     cas_client = client
                     os.environ["CAS_USERNAME"] = user
                     os.environ["CAS_PASSWORD"] = pw
-                    config["username"] = user # Store credentials in config for scrapers
+                    config["username"] = user
                     config["password"] = pw
-                    # Update state too so future to_config() calls preserve them
                     state.credentials = (user, pw)
                     console.print("[green]✅ Authentication successful.[/green]\n")
                 except Exception as e:
-                    console.print(f"[red]❌ Authentication failed: {e}. Please try again.[/red]\n")
+                    console.print(f"[yellow]⚠ Auto-login failed: {e}. Falling back to prompt.[/yellow]\n")
+                    cas_client = None
+
+            if not cas_client:
+                if args is not None:
+                    # In non-interactive mode, fail if credentials aren't provided or valid
+                    raise RuntimeError("Authentication failed. CAS credentials (CAS_USERNAME/CAS_PASSWORD) are missing or invalid in environment.")
+                
+                # Interactive prompt loop
+                while not cas_client:
+                    user = await questionary.text("Enter Username:", style=custom_style).ask_async()
+                    if user is None: return # Allow cancel
+                    pw = await questionary.password("Enter Password:", style=custom_style).ask_async()
+                    if pw is None: return # Allow cancel
+                    console.print("\n[blue]ℹ Authenticating...[/blue]")
+                    try:
+                        client = AsyncCASClient("cas6")
+                        await client.login(username=user, password=pw)
+                        cas_client = client
+                        os.environ["CAS_USERNAME"] = user
+                        os.environ["CAS_PASSWORD"] = pw
+                        config["username"] = user # Store credentials in config for scrapers
+                        config["password"] = pw
+                        # Update state too so future to_config() calls preserve them
+                        state.credentials = (user, pw)
+                        console.print("[green]✅ Authentication successful.[/green]\n")
+                    except Exception as e:
+                        console.print(f"[red]❌ Authentication failed: {e}. Please try again.[/red]\n")
 
         # ── 4. Execution Lifecycle ───────────────────────────────────────────
         if mode_load or mode_export:
+            from db.database import init_db
+            await init_db()
             db_context = AsyncSessionLocal()
             db_session = await db_context.__aenter__()
 
@@ -320,10 +383,16 @@ async def run_pipeline():
             if active_scrapers:
                 master = progress.add_task("[bold blue]Downloading Data[/bold blue]", total=len(active_scrapers))
                 try:
-                    harvest = await asyncio.gather(*[run_step_async(s, PipelineContext(cas_client, db_session, progress, progress.add_task(f"  {s['name']}", total=None), config=config, log=lambda x: None)) for s in active_scrapers])
-                    results.extend(harvest)
+                    # Run scrapers sequentially — concurrent SI Ecoles auth conflicts (errCode=1)
+                    # arise when multiple scrapers race to establish SAML sessions simultaneously.
+                    for s in active_scrapers:
+                        task_progress_id = progress.add_task(f"  {s['name']}", total=None)
+                        res = await run_step_async(s, PipelineContext(cas_client, db_session, progress, task_progress_id, config=config, log=lambda x: None))
+                        results.append(res)
+                        progress.update(master, advance=1)
                 except (asyncio.CancelledError, KeyboardInterrupt): pass
                 progress.update(master, completed=len(active_scrapers))
+
             if active_loaders:
                 master = progress.add_task("[bold magenta]Updating Database[/bold magenta]", total=len(active_loaders))
                 for l in active_loaders:
@@ -339,11 +408,13 @@ async def run_pipeline():
                 await db_session.rollback()
                 console.print("[bold red]🛑 Changes rolled back due to pipeline errors.[/bold red]")
         if db_context: await db_context.__aexit__(None, None, None)
+        if cas_client: await cas_client.aclose()
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         console.print("\n[bold yellow]⚠ OPERATION INTERRUPTED.[/bold yellow]")
         if db_session: await db_session.rollback()
         if db_context: await db_context.__aexit__(None, None, None)
+        if cas_client: await cas_client.aclose()
 
     if results:
         console.print()

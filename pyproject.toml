@@ -23,6 +23,7 @@ dependencies = [
     "maiselint",
     "agendint",
     "backend",
+    "playwright>=1.60.0",
 ]
 
 [project.scripts]

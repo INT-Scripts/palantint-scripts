@@ -66,8 +66,8 @@ async def load_groupes(db_session: AsyncSession, progress=None, task_id=None, lo
         club_memberships[norm_gname].update(gmembers)
 
         # Infer Parent Groups (e.g., Gp-EI1-G2a -> Gp-EI1-G2, Gp-EI1-G, Gp-EI1)
-        # Regex to find scientific/academic group patterns
-        m = re.match(r"(Gp-[A-Z]+[0-9])(-[A-Za-z0-9]+)?", gname)
+        # Regex to find scientific/academic group patterns (case-insensitive prefix for GP- or Gp-)
+        m = re.match(r"([Gg][Pp]-[A-Z]+[0-9])(-[A-Za-z0-9]+)?", gname, re.IGNORECASE)
         if m:
             base = m.group(1) # e.g., Gp-EI1
             suffix = m.group(2) or "" # e.g., -G2a

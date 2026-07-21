@@ -2,8 +2,9 @@ import asyncio
 import json
 import os
 import httpx
-from casint import CASClient
-from trombint.client import TrombINT, ETUDIANTS_URL
+from casint import AsyncCASClient
+from trombint import AsyncTrombiClient
+from trombint.config import ETUDIANTS_URL
 
 # Paths
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
@@ -41,7 +42,7 @@ async def download_image(client: httpx.AsyncClient, url: str, name: str, directo
     except: pass
     return False
 
-async def scrape_media(cas_client: CASClient, progress=None, task_id=None, config: dict = None, log=print):
+async def scrape_media(cas_client: AsyncCASClient, progress=None, task_id=None, config: dict = None, log=print):
     concurrency = config.get("concurrency", 5) if config else 5
     delay = config.get("delay", 0.1) if config else 0.1
 
@@ -79,9 +80,15 @@ async def scrape_media(cas_client: CASClient, progress=None, task_id=None, confi
     log(f"Harvesting [cyan]{len(targets)}[/cyan] missing portraits and logos...")
 
     sem = asyncio.Semaphore(concurrency)
-    t_client = TrombINT(cookies=cas_client.cookies)
     
-    async with (await t_client.get_client()) as client:
+    u = config.get("username") or os.getenv("CAS_USERNAME") if config else os.getenv("CAS_USERNAME")
+    p = config.get("password") or os.getenv("CAS_PASSWORD") if config else os.getenv("CAS_PASSWORD")
+    t_client = AsyncTrombiClient(username=u, password=p)
+    
+    async with t_client:
+        cas = await t_client._cas_client()
+        client = cas._client
+        
         async def work(url, name, directory, referer):
             async with sem:
                 await download_image(client, url, name, directory, referer)
