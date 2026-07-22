@@ -35,14 +35,21 @@ custom_style = Style([
     ('selected', 'fg:#5fafff'), ('separator', 'fg:#6c6c6c'), ('instruction', 'fg:#8a8a8a italic'),
 ])
 
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding.key_bindings import merge_key_bindings
+
 def apply_nav_keys(q: questionary.Question):
     """Hooks Left/Esc keys into a questionary object for back-navigation."""
-    kb = q.application.key_bindings
-    if kb:
-        @kb.add('left')
-        @kb.add('escape')
-        def _(event):
-            event.app.exit(result="__BACK__")
+    kb_custom = KeyBindings()
+    @kb_custom.add('left')
+    @kb_custom.add('escape')
+    def _(event):
+        event.app.exit(result="__BACK__")
+    
+    if hasattr(q.application, 'key_bindings') and q.application.key_bindings:
+        q.application.key_bindings = merge_key_bindings([q.application.key_bindings, kb_custom])
+    else:
+        q.application.key_bindings = kb_custom
     return q
 
 # ── Models ───────────────────────────────────────────────────────────────────
