@@ -7,10 +7,10 @@ from casint import CASClient
 
 logger = logging.getLogger("palantint.scrapers.maisel")
 
-SCRAP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scrap"))
+SCRAP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
 PLANS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/assets/plans"))
 
-async def scrape_maisel(cas_client: CASClient, progress=None, task_id=None, config: dict = None, log=print):
+async def scrape_maisel(cas_client: CASClient = None, progress=None, task_id=None, config: dict = None, log=print):
     delay = config.get("delay", 0.5) if config else 0.5
     
     os.makedirs(SCRAP_DIR, exist_ok=True)
@@ -21,7 +21,13 @@ async def scrape_maisel(cas_client: CASClient, progress=None, task_id=None, conf
     if progress and task_id:
         progress.update(task_id, description="  [blue]Scraping Apartments: Initializing session...[/blue]")
 
-    client = MaiselINT(cookies=cas_client.cookies)
+    u = (config.get("username") if config else None) or os.getenv("CAS_USERNAME")
+    p = (config.get("password") if config else None) or os.getenv("CAS_PASSWORD")
+
+    if u and p:
+        client = await MaiselINT.create(username=u, password=p)
+    else:
+        client = MaiselINT(cookies=cas_client.cookies if cas_client else None)
 
     # 1. Scrape Lodging Info
     if progress and task_id:

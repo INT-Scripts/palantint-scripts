@@ -15,7 +15,7 @@ async def load_apartments(db_session: AsyncSession, progress=None, task_id=None,
     Maisel room details from logements.json into the database.
     """
     json_path = os.path.join(EXPORT_DIR, "apartments.json")
-    scrap_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scrap"))
+    scrap_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
     logements_path = os.path.join(scrap_dir, "logements.json")
 
     # 1. Load Student -> Apartment Mappings
