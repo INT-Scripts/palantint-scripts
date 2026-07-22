@@ -47,11 +47,13 @@ async def interactive_menu():
                 choices=[
                     questionary.Choice("🗺️  2D Map Vector Processing (Generate floor SVGs)", value="map"),
                     questionary.Choice("📦 3D Asset Processing (Tile & Align GLTF models)", value="3d"),
-                    questionary.Choice("⬅️  Back to Main Menu", value="back"),
                 ],
                 style=custom_style,
                 instruction="[Left/Esc: Back]"
             )).ask_async()
+
+            if other_choice in ("__BACK__", None):
+                continue
 
             if other_choice == "map":
                 from .map_gen import main as map_main

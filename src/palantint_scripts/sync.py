@@ -105,12 +105,11 @@ async def step_select_phase(state: FlowState):
             questionary.Choice("Download External Data (Web -> JSON)", value="scrape_only"),
             questionary.Choice("Update Database (JSON -> DB)", value="load_only"),
             questionary.Choice("Create Backup (DB -> JSON)", value="export_only"),
-            questionary.Choice("Cancel", value="EXIT"),
         ],
-        style=custom_style
+        style=custom_style,
+        instruction="[Left/Esc: Back]"
     )).ask_async()
-    if not choice or choice == "EXIT": return "EXIT"
-    if choice == "__BACK__": return "EXIT" # Start of flow, exit back to main menu
+    if not choice or choice in ("EXIT", "__BACK__"): return "EXIT"
     state.phase = choice
     return "NEXT"
 
