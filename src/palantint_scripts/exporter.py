@@ -4,73 +4,124 @@ import uuid
 from typing import Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from db.models import Student, Club, AgendaEvent, MapMetadata, StudentRelationship, SocialLink, Media, StudentClub, ClubLink
+from db.models import Student, MapMetadata, StudentRelationship, SocialLink, Media, RelationshipType
 
 async def export_db_data(db_session: AsyncSession, log: Callable = print):
     """
     PalantINT Vault Exporter
     -----------------------
-    Exports the current state of the database to data/exports/.
-    This includes both automated subject data AND manual OSINT intelligence.
+    Exports human OSINT intelligence and admin infrastructure calibrations to data/exports/.
+    Excludes automated web scrap data (scraped students, clubs, agendas) which are harvested by scrapers.
     """
     export_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../data/exports"))
     os.makedirs(export_dir, exist_ok=True)
-    
-    # 1. CORE SUBJECTS & INFRASTRUCTURE (Full Snapshots)
-    # These tables are overwritten on every export to reflect the current DB state.
-    export_targets = [
-        {"model": Student, "filename": "students.json", "desc": "Subject Registry"},
-        {"model": Club, "filename": "clubs.json", "desc": "Organization Registry"},
-        {"model": ClubLink, "filename": "club_links.json", "desc": "Organization Links"},
-        {"model": StudentClub, "filename": "memberships.json", "desc": "Subject-Organization Ties"},
-        {"model": MapMetadata, "filename": "maps.json", "desc": "Map Calibration Vault"},
-        {"model": StudentRelationship, "filename": "relationships.json", "desc": "Social Graph Vault"},
-        {"model": SocialLink, "filename": "socials.json", "desc": "External Handles Vault"},
-        {"model": Media, "filename": "media.json", "desc": "Comms Log & Media Metadata"},
-    ]
-    
-    for target in export_targets:
-        model = target["model"]
-        name = model.__tablename__
-        filename = target["filename"]
-        
-        log(f"Archiving [magenta]{target['desc']}[/magenta] ({name})...")
-        
-        result = await db_session.execute(select(model))
-        items = result.scalars().all()
-        
-        data = []
-        for item in items:
-            record = {}
-            # Use SQLModel/SQLAlchemy inspection to get all columns
-            for col in item.__table__.columns:
-                val = getattr(item, col.name)
-                # Ensure JSON-safe types (UUIDs and Datetimes to strings)
-                if isinstance(val, uuid.UUID):
-                    val = str(val)
-                elif hasattr(val, "isoformat"):
-                    val = val.isoformat()
-                record[col.name] = val
-            data.append(record)
-            
-        out_path = os.path.join(export_dir, filename)
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-            
-        log(f"[green]✓ Exported {len(data)} records to {filename}[/green]")
 
-    # 2. PRECISION MAPPINGS (Formatted for specialized loaders)
-    log("Generating [magenta]Precision Apartment Map[/magenta]...")
-    result = await db_session.execute(
+    # 1. MAP METADATA (Structural Calibration Vault)
+    log("Archiving [magenta]Map Calibration Vault[/magenta] (maps_metadata)...")
+    res_maps = await db_session.execute(select(MapMetadata))
+    maps_data = []
+    for m in res_maps.scalars().all():
+        maps_data.append({
+            "id": str(m.id),
+            "building_id": m.building_id,
+            "floor_id": m.floor_id,
+            "pillars": m.pillars
+        })
+    with open(os.path.join(export_dir, "maps.json"), "w", encoding="utf-8") as f:
+        json.dump(maps_data, f, indent=4, ensure_ascii=False)
+    log(f"[green]✓ Exported {len(maps_data)} map calibrations to maps.json[/green]")
+
+    # 2. SOCIAL LINKS (External Handles Vault)
+    log("Archiving [magenta]External Handles Vault[/magenta] (social_links)...")
+    res_socials = await db_session.execute(
+        select(SocialLink, Student.trombint_id)
+        .join(Student, SocialLink.student_id == Student.id)
+    )
+    socials_data = []
+    for social, trombint_id in res_socials.all():
+        socials_data.append({
+            "id": str(social.id),
+            "student_id": str(social.student_id),
+            "trombint_id": trombint_id,
+            "platform": social.platform,
+            "username": social.username,
+            "url": social.url
+        })
+    with open(os.path.join(export_dir, "socials.json"), "w", encoding="utf-8") as f:
+        json.dump(socials_data, f, indent=4, ensure_ascii=False)
+    log(f"[green]✓ Exported {len(socials_data)} social handles to socials.json[/green]")
+
+    # 3. SOCIAL GRAPH / RELATIONSHIPS (Social Graph Vault)
+    log("Archiving [magenta]Social Graph Vault[/magenta] (student_relationships)...")
+    stmt_rel = (
+        select(StudentRelationship, RelationshipType.name.label("type_name"))
+        .join(RelationshipType, StudentRelationship.relationship_type_id == RelationshipType.id)
+    )
+    res_rel = await db_session.execute(stmt_rel)
+    rel_rows = res_rel.all()
+
+    relationships_data = []
+    for rel, type_name in rel_rows:
+        student_a = await db_session.get(Student, rel.student_a_id)
+        student_b = await db_session.get(Student, rel.student_b_id)
+
+        relationships_data.append({
+            "id": str(rel.id),
+            "student_a_id": str(rel.student_a_id),
+            "student_a_trombint_id": student_a.trombint_id if student_a else None,
+            "student_b_id": str(rel.student_b_id),
+            "student_b_trombint_id": student_b.trombint_id if student_b else None,
+            "relationship_type_id": str(rel.relationship_type_id),
+            "relationship_type_name": type_name,
+            "created_at": rel.created_at.isoformat() if hasattr(rel.created_at, "isoformat") else str(rel.created_at)
+        })
+    with open(os.path.join(export_dir, "relationships.json"), "w", encoding="utf-8") as f:
+        json.dump(relationships_data, f, indent=4, ensure_ascii=False)
+    log(f"[green]✓ Exported {len(relationships_data)} relationships to relationships.json[/green]")
+
+    # 4. COMMS LOG & MEDIA (Media Vault)
+    log("Archiving [magenta]Comms Log & Media Vault[/magenta] (media)...")
+    res_media = await db_session.execute(
+        select(Media, Student.trombint_id)
+        .join(Student, Media.student_id == Student.id)
+    )
+    media_data = []
+    for m, trombint_id in res_media.all():
+        media_data.append({
+            "id": str(m.id),
+            "student_id": str(m.student_id),
+            "trombint_id": trombint_id,
+            "type": m.type,
+            "file_path": m.file_path,
+            "content": m.content,
+            "author_name": m.author_name,
+            "uploaded_by_user_id": str(m.uploaded_by_user_id) if m.uploaded_by_user_id else None,
+            "uploaded_at": m.uploaded_at.isoformat() if hasattr(m.uploaded_at, "isoformat") else str(m.uploaded_at)
+        })
+    with open(os.path.join(export_dir, "media.json"), "w", encoding="utf-8") as f:
+        json.dump(media_data, f, indent=4, ensure_ascii=False)
+    log(f"[green]✓ Exported {len(media_data)} media records to media.json[/green]")
+
+    # 5. PRECISION HOUSING MAP (Student -> Apartment Vault)
+    log("Archiving [magenta]Precision Housing Map[/magenta] (apartments.json)...")
+    res_apts = await db_session.execute(
         select(Student.trombint_id, Student.apartment)
         .where(Student.apartment.isnot(None))
     )
-    
-    # Standardized format: { "trombint_id": "apartment_number" }
-    mapping = {row.trombint_id: row.apartment for row in result.all() if row.trombint_id and row.apartment}
-            
+    mapping = {row.trombint_id: row.apartment for row in res_apts.all() if row.trombint_id and row.apartment}
     with open(os.path.join(export_dir, "apartments.json"), "w", encoding="utf-8") as f:
         json.dump(mapping, f, indent=4, ensure_ascii=False)
-    
-    log(f"[green]✓ Exported {len(mapping)} mappings to apartments.json[/green]")
-    log(f"\n[bold green]Vault Snapshot Complete.[/bold green] All OSINT data is now portable.")
+    log(f"[green]✓ Exported {len(mapping)} housing mappings to apartments.json[/green]")
+
+    # Clean up obsolete scraped files from exports dir if present
+    obsolete_files = ["students.json", "clubs.json", "club_links.json", "memberships.json", "maisel_apartments.json"]
+    for obs in obsolete_files:
+        obs_path = os.path.join(export_dir, obs)
+        if os.path.exists(obs_path):
+            try:
+                os.remove(obs_path)
+                log(f"[dim]Removed legacy scraped export file: {obs}[/dim]")
+            except Exception:
+                pass
+
+    log(f"\n[bold green]Vault Snapshot Complete.[/bold green] OSINT & Infrastructure data saved.")
