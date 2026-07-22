@@ -24,8 +24,7 @@ async def interactive_menu():
             choices=[
                 questionary.Choice("🔄 ETL Data Pipeline (Scraping & Sync)", value="sync"),
                 questionary.Choice("🔑 Admin Management (Manage admin user)", value="admin"),
-                questionary.Choice("🗺️  Map Processing (Process floors SVG)", value="map"),
-                questionary.Choice("📦 3D Asset Pipeline (Process & Align GLTF)", value="3d"),
+                questionary.Choice("🛠️  Other Utilities (Map & 3D Asset Processing)", value="other"),
                 questionary.Choice("❌ Exit", value="exit"),
             ],
             style=custom_style
@@ -41,14 +40,25 @@ async def interactive_menu():
             password = await questionary.password("Enter Admin Password:", style=custom_style).ask_async()
             if username and password:
                 await create_first_admin(username, password)
-                
-        elif choice == "map":
-            from .map_gen import main as map_main
-            map_main()
 
-        elif choice == "3d":
-            from .process_3d import process_3d_assets
-            process_3d_assets()
+        elif choice == "other":
+            other_choice = await apply_nav_keys(questionary.select(
+                "Select Utility Tool:",
+                choices=[
+                    questionary.Choice("🗺️  2D Map Vector Processing (Generate floor SVGs)", value="map"),
+                    questionary.Choice("📦 3D Asset Processing (Tile & Align GLTF models)", value="3d"),
+                    questionary.Choice("⬅️  Back to Main Menu", value="back"),
+                ],
+                style=custom_style,
+                instruction="[Left/Esc: Back]"
+            )).ask_async()
+
+            if other_choice == "map":
+                from .map_gen import main as map_main
+                map_main()
+            elif other_choice == "3d":
+                from .process_3d import process_3d_assets
+                process_3d_assets()
         
         elif choice in ("exit", "BACK", None):
             console.print("\n[dim]Goodbye.[/dim]")
@@ -86,11 +96,15 @@ def main():
     admin_parser.add_argument("username", nargs='?', help="Username of the admin")
     admin_parser.add_argument("password", nargs='?', help="Password of the admin")
 
-    # Map
-    map_parser = subparsers.add_parser("map", help="Generate interactive floor plans (SVG processing)")
+    # Other Utilities Group
+    other_parser = subparsers.add_parser("other", help="Other utilities (Map & 3D asset processing)")
+    other_subparsers = other_parser.add_subparsers(dest="subcommand", help="Utility subcommands")
+    other_subparsers.add_parser("map", help="Generate interactive floor plans (SVG processing)")
+    other_subparsers.add_parser("3d", help="Process and align 3D tiles (GLTF assets)")
 
-    # 3D
-    three_d_parser = subparsers.add_parser("3d", help="Process and align 3D tiles (GLTF assets)")
+    # Backward compatibility aliases
+    subparsers.add_parser("map", help="Alias for 'other map'")
+    subparsers.add_parser("3d", help="Alias for 'other 3d'")
 
     args = parser.parse_args()
 
@@ -101,11 +115,9 @@ def main():
             sys.stdout = log_file_obj
             sys.stderr = log_file_obj
             
-            # Configure console file target
             global console
             console.file = log_file_obj
             
-            # Also import and patch sync's console object
             from .sync import console as sync_console
             sync_console.file = log_file_obj
         except Exception as e:
@@ -113,7 +125,6 @@ def main():
             sys.exit(1)
 
     if args.command is None and len(sys.argv) == 1:
-        # Start interactive mode
         try:
             asyncio.run(interactive_menu())
         except KeyboardInterrupt:
@@ -127,6 +138,16 @@ def main():
 
     elif args.command == "admin":
         asyncio.run(run_admin(args))
+
+    elif args.command == "other":
+        if getattr(args, "subcommand", None) == "map":
+            from .map_gen import main as map_main
+            map_main()
+        elif getattr(args, "subcommand", None) == "3d":
+            from .process_3d import process_3d_assets
+            process_3d_assets()
+        else:
+            other_parser.print_help()
 
     elif args.command == "map":
         from .map_gen import main as map_main
