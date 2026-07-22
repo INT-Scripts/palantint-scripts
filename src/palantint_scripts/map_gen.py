@@ -98,29 +98,72 @@ def main():
                         break
                     img[img == 128], mask[:] = 0, 0
             
+            polygon_fill = 'fill="rgba(120, 113, 108, 0.12)" stroke="rgba(120, 113, 108, 0.4)" stroke-width="1" pointer-events="all"'
             if filled:
                 contours, _ = cv2.findContours(mask[1:-1, 1:-1], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 if contours:
                     c = max(contours, key=cv2.contourArea)
                     approx = cv2.approxPolyDP(c, 0.01 * cv2.arcLength(c, True), True)
                     points_str = " ".join([f"{pt[0][0]/scale:.1f},{pt[0][1]/scale:.1f}" for pt in approx])
-                    # removed transition-all, changed fill to none
-                    polygon = f'<polygon class="room-area" points="{points_str}" fill="none" />'
+                    polygon = f'<polygon class="room-area" points="{points_str}" {polygon_fill} />'
                     img[img == 128] = 0
                     return f'<a data-room="{room_id}" class="cursor-pointer group">\n{polygon}\n{modified_text}\n</a>'
             
             # Fallback to rect if floodfill fails
-            rect = f'<rect class="room-area" x="{x-15}" y="{y-25}" width="60" height="40" rx="0" fill="none" />'
+            rect = f'<rect class="room-area" x="{x-15}" y="{y-25}" width="60" height="40" rx="0" {polygon_fill} />'
             img[img == 128] = 0
             return f'<a data-room="{room_id}" class="cursor-pointer group">\n{rect}\n{modified_text}\n</a>'
 
-        new_content = re.sub(r'<text id="([^"]+)"[^>]*>.*?</text>', process_match, content, flags=re.DOTALL)
-        new_content = re.sub(r'<rect[^>]*fill="white"[^>]*/>', '', new_content)
-        new_content = re.sub(r'stroke="[^"]+"', r'stroke="white"', new_content)
-        new_content = re.sub(r'stroke-width="[^"]+"', r'stroke-width="2"', new_content)
-        
-        with open(os.path.join(OUTPUT_DIR, basename), 'w') as file: 
-            file.write(new_content)
+    new_content = re.sub(r'<text id="([^"]+)"[^>]*>.*?</text>', process_match, content, flags=re.DOTALL)
+    new_content = re.sub(r'<rect[^>]*fill="white"[^>]*/>', '', new_content)
+    new_content = re.sub(r'stroke="[^"]+"', r'stroke="white"', new_content)
+    new_content = re.sub(r'stroke-width="[^"]+"', r'stroke-width="2"', new_content)
+    
+    EMBEDDED_STYLE = """<style id="plan-theme-styles">
+  a[data-room] { cursor: pointer; }
+  a[data-room] text, a[data-room] tspan { pointer-events: none !important; user-select: none !important; }
+  
+  /* 1. Default room fill & stroke */
+  a[data-room] .room-area, g[data-room] .room-area, polygon.room-area, path.room-area, rect.room-area {
+    fill: rgba(120, 113, 108, 0.12) !important;
+    stroke: rgba(120, 113, 108, 0.4) !important;
+    stroke-width: 1px !important;
+    pointer-events: all !important;
+    transition: fill 0.15s ease, stroke 0.15s ease;
+  }
+
+  /* 2. Passive Occupied & Filtered room glow (Orange) */
+  a[data-room][data-occupied="true"] .room-area, g[data-room][data-occupied="true"] .room-area,
+  a[data-room][data-filtered="true"] .room-area, g[data-room][data-filtered="true"] .room-area {
+    fill: rgba(249, 115, 22, 0.32) !important;
+    stroke: #f97316 !important;
+    stroke-width: 1.5px !important;
+  }
+
+  /* 3. Selected / Active room (Blue Filled) */
+  a[data-room][data-active="true"] .room-area, g[data-room][data-active="true"] .room-area,
+  a[data-room][data-selected="true"] .room-area, g[data-room][data-selected="true"] .room-area {
+    fill: rgba(37, 99, 235, 0.75) !important;
+    stroke: #2563eb !important;
+    stroke-width: 2.5px !important;
+  }
+
+  /* 4. Hover state (Blue) — TOP PRIORITY (Overrides passive orange, active, default) */
+  a[data-room]:hover .room-area, a[data-room][data-hover="true"] .room-area,
+  a[data-room][data-occupied="true"]:hover .room-area, a[data-room][data-occupied="true"][data-hover="true"] .room-area,
+  a[data-room][data-active="true"]:hover .room-area, a[data-room][data-active="true"][data-hover="true"] .room-area {
+    fill: rgba(59, 130, 246, 0.55) !important;
+    stroke: #3b82f6 !important;
+    stroke-width: 2.5px !important;
+    cursor: pointer !important;
+  }
+</style>"""
+
+    if "<style" not in new_content:
+        new_content = re.sub(r'(<svg[^>]*?>)', r'\1\n' + EMBEDDED_STYLE, new_content, count=1)
+    
+    with open(os.path.join(OUTPUT_DIR, basename), 'w') as file: 
+        file.write(new_content)
 
     print("SVG Processing complete.")
 
