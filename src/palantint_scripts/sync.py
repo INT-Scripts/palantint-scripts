@@ -211,9 +211,12 @@ async def step_execution_mode(state: FlowState):
 
 async def step_vault_config(state: FlowState):
     if state.phase != "load_only": return "SKIP"
-    choice = await apply_nav_keys(questionary.confirm(
-        "Anchor Identities? (Restore UUIDs from vault/backups)",
-        default=True,
+    choice = await apply_nav_keys(questionary.select(
+        "OSINT Vault Restoration:",
+        choices=[
+            questionary.Choice("Restore OSINT Vault (Re-apply research, handles & calibrations)", value=True),
+            questionary.Choice("Skip Vault Restoration (Only load selected scrap files)", value=False),
+        ],
         style=custom_style,
         instruction="[Left/Esc: Back]"
     )).ask_async()
@@ -315,11 +318,9 @@ async def run_pipeline(args=None):
         if mode_load:
             if state.db_strategy == "purge": active_loaders.append({"name": "Wipe Database", "module": None})
             active_loaders.append({"name": "Setup Infrastructure", "module": "db.seed", "func": "seed_default_data"})
-            if state.anchor_vault:
-                active_loaders.append({"name": "Anchor Identities", "module": "palantint_scripts.loaders.vault", "func": "anchor_identities"})
             active_loaders.extend([d["loader"] for d in PIPELINE_DOMAINS if d["id"] in state.selected_ids and "loader" in d])
             if state.anchor_vault:
-                active_loaders.append({"name": "Restore Research", "module": "palantint_scripts.loaders.vault", "func": "restore_research"})
+                active_loaders.append({"name": "Restore OSINT Vault", "module": "palantint_scripts.loaders.vault", "func": "restore_research"})
         
         if mode_export: active_loaders.append({"name": "Export Database", "module": None})
 
