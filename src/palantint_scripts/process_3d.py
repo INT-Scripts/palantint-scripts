@@ -7,10 +7,7 @@ import shutil
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).parent.parent.parent.parent
-# Check both 'imput_gltf' and 'input_gltf' because of the typo in the folder name
-INPUT_DIR = ROOT_DIR / "data" / "scraps" / "imput_gltf"
-if not INPUT_DIR.exists():
-    INPUT_DIR = ROOT_DIR / "data" / "scraps" / "input_gltf"
+INPUT_DIR = ROOT_DIR / "data" / "scraps" / "input_gltf"
 TEMP_DIR = ROOT_DIR / "data" / "scraps" / "processing_temp"
 OUTPUT_DIR = ROOT_DIR / "data" / "assets" / "3d"
 
