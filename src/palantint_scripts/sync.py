@@ -92,7 +92,8 @@ PIPELINE_DOMAINS = [
     {"id": "groupes", "name": "Group Topologies", "scraper": {"name": "Scraping Groups", "module": "palantint_scripts.scrapers.groupes", "func": "scrape_groupes", "needs_cas": True}, "loader": {"name": "Update Groups", "module": "palantint_scripts.loaders.groupes", "func": "load_groupes", "needs_db": True}},
     {"id": "agenda", "name": "Timetables", "scraper": {"name": "Scraping Schedules", "module": "palantint_scripts.scrapers.agenda", "func": "scrape_agenda", "needs_cas": True}, "loader": {"name": "Update Schedules", "module": "palantint_scripts.loaders.agenda", "func": "load_agenda", "needs_db": True}},
     {"id": "media", "name": "Media Assets", "scraper": {"name": "Harvesting Media", "module": "palantint_scripts.scrapers.media", "func": "scrape_media", "needs_cas": True}},
-    {"id": "apartments", "name": "Apartments", "scraper": {"name": "Scraping Apartments", "module": "palantint_scripts.scrapers.maisel", "func": "scrape_maisel", "needs_cas": True}, "loader": {"name": "Update Apartments", "module": "palantint_scripts.loaders.apartments", "func": "load_apartments", "needs_db": True}}
+    {"id": "apartments", "name": "Apartments", "scraper": {"name": "Scraping Apartments", "module": "palantint_scripts.scrapers.maisel", "func": "scrape_maisel", "needs_cas": True}, "loader": {"name": "Update Apartments", "module": "palantint_scripts.loaders.apartments", "func": "load_apartments", "needs_db": True}},
+    {"id": "vault", "name": "OSINT Vault & Calibrations", "loader": {"name": "Restore OSINT Vault", "module": "palantint_scripts.loaders.vault", "func": "load_vault", "needs_db": True}}
 ]
 
 # ── Step Definitions ─────────────────────────────────────────────────────────
@@ -131,11 +132,14 @@ async def step_db_strategy(state: FlowState):
 
 async def step_select_domains(state: FlowState):
     if state.phase == "export_only": return "SKIP"
+    domain_choices = [
+        questionary.Choice(d["name"], value=d["id"], checked=True)
+        for d in PIPELINE_DOMAINS
+        if (state.phase == "scrape_only" and "scraper" in d) or (state.phase == "load_only" and "loader" in d)
+    ]
     choice = await apply_nav_keys(questionary.checkbox(
         "Select Data to Process:",
-        choices=[
-            questionary.Choice(d["name"], value=d["id"], checked=True) for d in PIPELINE_DOMAINS
-        ],
+        choices=domain_choices,
         style=custom_style,
         instruction="[Left/Esc: Back]"
     )).ask_async()
@@ -209,22 +213,6 @@ async def step_execution_mode(state: FlowState):
     state.full_sync = choice
     return "NEXT"
 
-async def step_vault_config(state: FlowState):
-    if state.phase != "load_only": return "SKIP"
-    choice = await apply_nav_keys(questionary.select(
-        "OSINT Vault Restoration:",
-        choices=[
-            questionary.Choice("Restore OSINT Vault (Re-apply research, handles & calibrations)", value=True),
-            questionary.Choice("Skip Vault Restoration (Only load selected scrap files)", value=False),
-        ],
-        style=custom_style,
-        instruction="[Left/Esc: Back]"
-    )).ask_async()
-    if choice is None: return "EXIT"
-    if choice == "__BACK__": return "BACK"
-    state.anchor_vault = choice
-    return "NEXT"
-
 # ── Engine ──────────────────────────────────────────────────────────────────
 
 async def run_step_async(step_info, ctx: PipelineContext):
@@ -291,8 +279,7 @@ async def run_pipeline(args=None):
                 step_select_domains,
                 step_agenda_config,
                 step_velocity,
-                step_execution_mode,
-                step_vault_config
+                step_execution_mode
             ]
             
             history = []
@@ -319,8 +306,6 @@ async def run_pipeline(args=None):
             if state.db_strategy == "purge": active_loaders.append({"name": "Wipe Database", "module": None})
             active_loaders.append({"name": "Setup Infrastructure", "module": "db.seed", "func": "seed_default_data"})
             active_loaders.extend([d["loader"] for d in PIPELINE_DOMAINS if d["id"] in state.selected_ids and "loader" in d])
-            if state.anchor_vault:
-                active_loaders.append({"name": "Restore OSINT Vault", "module": "palantint_scripts.loaders.vault", "func": "restore_research"})
         
         if mode_export: active_loaders.append({"name": "Export Database", "module": None})
 
