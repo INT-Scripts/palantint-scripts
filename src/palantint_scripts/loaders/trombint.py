@@ -9,7 +9,9 @@ from sqlalchemy.dialects.postgresql import insert
 from db.database import AsyncSessionLocal
 from db.models import Student
 
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
+from palantint_scripts.config import SCRAPS_AUTO_DIR
+
+DATA_DIR = str(SCRAPS_AUTO_DIR)
 
 def _format_name(nom_complet: str):
     parts = nom_complet.split()

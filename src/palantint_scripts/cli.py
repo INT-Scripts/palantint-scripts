@@ -23,6 +23,7 @@ async def interactive_menu():
             "What would you like to do?",
             choices=[
                 questionary.Choice("🔄 ETL Data Pipeline (Scraping & Sync)", value="sync"),
+                questionary.Choice("🔍 Verify Scraped Data & Schemas", value="verify"),
                 questionary.Choice("🔑 Admin Management (Manage admin user)", value="admin"),
                 questionary.Choice("🛠️  Other Utilities (Map & 3D Asset Processing)", value="other"),
                 questionary.Choice("❌ Exit", value="exit"),
@@ -33,6 +34,10 @@ async def interactive_menu():
         if choice == "sync":
             from .sync import run_pipeline
             await run_pipeline()
+
+        elif choice == "verify":
+            from .verifier import run_all_verifications
+            run_all_verifications()
         
         elif choice == "admin":
             from .admin import create_first_admin
@@ -93,6 +98,9 @@ def main():
     sync_parser.add_argument("--purge", action="store_true", help="Wipe database before loading")
     sync_parser.add_argument("--hydrate", action="store_true", help="Force re-verify all records")
 
+    # Verify
+    subparsers.add_parser("verify", help="Verify scraped data schemas and asset integrity")
+
     # Admin
     admin_parser = subparsers.add_parser("admin", help="Manage administrative users")
     admin_parser.add_argument("username", nargs='?', help="Username of the admin")
@@ -137,6 +145,10 @@ def main():
     if args.command == "sync":
         from .sync import run_pipeline
         asyncio.run(run_pipeline(args))
+
+    elif args.command == "verify":
+        from .verifier import run_all_verifications
+        run_all_verifications()
 
     elif args.command == "admin":
         asyncio.run(run_admin(args))

@@ -18,7 +18,9 @@ from playwright.async_api import async_playwright
 from agendint import AgendaClient
 
 # ── Configuration ────────────────────────────────────────────────────────────
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
+from palantint_scripts.config import SCRAPS_AUTO_DIR
+
+DATA_DIR = str(SCRAPS_AUTO_DIR)
 os.makedirs(DATA_DIR, exist_ok=True)
 OUTPUT_PATH = os.path.join(DATA_DIR, "groupes.json")
 
@@ -152,7 +154,6 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
     existing_map = {str(g["id"]): g for g in scraped_groups}
 
     # 2. Authenticate AgendaClient
-    si_client = AgendaClient(cookies=cas_client.cookies)
     u = config.get("username") or os.getenv("CAS_USERNAME")
     p = config.get("password") or os.getenv("CAS_PASSWORD")
     
@@ -160,6 +161,7 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
         log("  [red]Critical: No credentials provided for SI Ecoles login.[/red]")
         raise RuntimeError("Missing Credentials")
 
+    si_client = AgendaClient()
     if not await si_client.login(username=u, password=p):
         log("  [red]Critical: SI Ecoles rejected the session. Check credentials.[/red]")
         raise RuntimeError("SI Ecoles Authentication Failed")

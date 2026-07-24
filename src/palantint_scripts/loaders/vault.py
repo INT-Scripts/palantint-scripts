@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import AsyncSessionLocal
 from db.models import (
-    MapMetadata, StudentRelationship, SocialLink, Media, 
+    MapMetadata, ThreeDConfig, StudentRelationship, SocialLink, Media, 
     Student, RelationshipType, User
 )
 
@@ -54,6 +54,32 @@ async def restore_maps(db_session: AsyncSession, log=print):
             db_session.add(meta)
         else:
             meta.pillars = pillars
+    await db_session.flush()
+
+async def restore_3d_config(db_session: AsyncSession, log=print):
+    """Restores 3D map tile mappings and waypoints from 3d_config.json into database."""
+    json_path = os.path.join(EXPORT_DIR, "3d_config.json")
+    if not os.path.exists(json_path):
+        json_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/assets/3d/config.json"))
+    if not os.path.exists(json_path): return
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not data: return
+
+    log("Restoring [magenta]3D Map Tile Mappings & Waypoints[/magenta]...")
+    res = await db_session.execute(select(ThreeDConfig).where(ThreeDConfig.key == "default"))
+    cfg = res.scalars().first()
+    if not cfg:
+        cfg = ThreeDConfig(
+            key="default",
+            tile_mappings=data.get("tile_mappings", {}),
+            markers=data.get("markers", [])
+        )
+        db_session.add(cfg)
+    else:
+        cfg.tile_mappings = data.get("tile_mappings", cfg.tile_mappings)
+        cfg.markers = data.get("markers", cfg.markers)
     await db_session.flush()
 
 async def restore_socials(db_session: AsyncSession, log=print):
@@ -236,6 +262,7 @@ async def anchor_identities(db_session: AsyncSession, log=print):
 async def restore_research(db_session: AsyncSession, log=print):
     """Pass 3: Restores all human OSINT intelligence & map calibrations from vault."""
     await restore_maps(db_session, log)
+    await restore_3d_config(db_session, log)
     await restore_socials(db_session, log)
     await restore_relationships(db_session, log)
     await restore_media(db_session, log)

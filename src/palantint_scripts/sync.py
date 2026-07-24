@@ -52,6 +52,9 @@ def apply_nav_keys(q: questionary.Question):
         q.application.key_bindings = kb_custom
     return q
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # ── Models ───────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -66,16 +69,23 @@ class FlowState:
     concurrency: int = 5
     full_sync: bool = False
     anchor_vault: bool = True
+    credentials: Optional[tuple] = None
 
     def to_config(self) -> dict:
         """Flattens state into the unified config dict for scrapers."""
-        return {
+        cfg = {
             "delay": self.delay,
             "concurrency": self.concurrency,
             "full_sync": self.full_sync,
             "agenda_mode": self.agenda_mode,
             "agenda_custom_id": self.agenda_custom_id
         }
+        if self.credentials:
+            cfg["username"], cfg["password"] = self.credentials
+        elif os.getenv("CAS_USERNAME") and os.getenv("CAS_PASSWORD"):
+            cfg["username"] = os.getenv("CAS_USERNAME")
+            cfg["password"] = os.getenv("CAS_PASSWORD")
+        return cfg
 
 @dataclass
 class PipelineContext:
@@ -333,11 +343,7 @@ async def run_pipeline(args=None):
                     cas_client = None
 
             if not cas_client:
-                if args is not None:
-                    # In non-interactive mode, fail if credentials aren't provided or valid
-                    raise RuntimeError("Authentication failed. CAS credentials (CAS_USERNAME/CAS_PASSWORD) are missing or invalid in environment.")
-                
-                # Interactive prompt loop
+                # Prompt user for credentials if not found in environment or if auto-login failed
                 while not cas_client:
                     user = await questionary.text("Enter Username:", style=custom_style).ask_async()
                     if user is None: return # Allow cancel
@@ -350,9 +356,8 @@ async def run_pipeline(args=None):
                         cas_client = client
                         os.environ["CAS_USERNAME"] = user
                         os.environ["CAS_PASSWORD"] = pw
-                        config["username"] = user # Store credentials in config for scrapers
+                        config["username"] = user
                         config["password"] = pw
-                        # Update state too so future to_config() calls preserve them
                         state.credentials = (user, pw)
                         console.print("[green]✅ Authentication successful.[/green]\n")
                     except Exception as e:

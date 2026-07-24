@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.database import AsyncSessionLocal
 from db.models import Club, ClubLink
 
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
+from palantint_scripts.config import SCRAPS_AUTO_DIR
+
+DATA_DIR = str(SCRAPS_AUTO_DIR)
 
 async def load_clubs(db_session: AsyncSession, progress=None, task_id=None, log=print):
     json_path = os.path.join(DATA_DIR, "clubs.json")

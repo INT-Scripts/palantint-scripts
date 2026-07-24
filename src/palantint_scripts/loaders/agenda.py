@@ -13,7 +13,9 @@ from db.database import AsyncSessionLocal
 from db.models import AgendaEvent, Club, ClassGroup, EventClassGroup
 from palantint_scripts.utils import normalize_name
 
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps/agenda"))
+from palantint_scripts.config import SCRAPS_AUTO_DIR
+
+DATA_DIR = str(SCRAPS_AUTO_DIR / "agenda")
 
 async def load_agenda(db_session: AsyncSession, progress=None, task_id=None, log=print):
     index_path = os.path.join(DATA_DIR, "index.json")

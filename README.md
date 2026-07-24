@@ -4,13 +4,44 @@ This directory contains the **PalantINT Synchronization Engine**, a decoupled ET
 
 ---
 
+## ⚙️ Installation & First-Time Setup
+
+```bash
+# 1. Install Python dependencies
+uv sync
+
+# 2. Install Playwright browser binaries (required for Group scraper — one-time step)
+#    The Playwright Python package does NOT bundle browser executables.
+uv run playwright install chromium
+
+# 3. Configure CAS credentials (optional — pipeline will prompt if not set)
+#    Edit the root .env file and fill in:
+#    CAS_USERNAME=your_login
+#    CAS_PASSWORD=your_password
+
+# 4. Run the interactive pipeline
+uv run palantint
+```
+
+> **Note**: Step 2 downloads ~130 MB of Chromium browser binaries used by the Group Roster
+> scraper to navigate JavaScript-heavy SI-Étudiants pages. It is a one-time setup per machine.
+
+---
+
+
 ## 🏗️ Architecture: The Decoupled Pipeline
 
 PalantINT intentionally separates data acquisition from database management to ensure system resilience and offline capability.
 
-1.  **Phase 1: Harvest (Scrapers)**: Connects to external servers (CAS, Agenda, etc.) and saves raw data as JSON in `data/scraps/`. Scrapers are parallelized.
+1.  **Phase 1: Harvest (Scrapers)**: Connects to external servers (CAS, Agenda, etc.) and saves raw data as JSON in `data/scraps/auto/` (manual input sources reside in `data/scraps/manual/`). Scrapers are parallelized.
 2.  **Phase 2: Ingest (Loaders)**: Synchronizes local JSON files into PostgreSQL. Loaders are sequential and follow a strict **3-Pass Sequence** to ensure identity stability.
 3.  **Phase 3: Snapshot (Vault)**: Backs up manual research (Notes, Socials, Relationships) from the DB into portable JSON in `data/exports/`.
+
+### 📌 Path Resolution Contract
+All scripts import path locations from `palantint_scripts.config`:
+* `SCRAPS_AUTO_DIR` (`data/scraps/auto/`): `agenda/`, `clubs.json`, `groupes.json`, `logements.json`, `students.json`, `processing_temp/`
+* `SCRAPS_MANUAL_DIR` (`data/scraps/manual/`): `apartments.csv/txt`, `foyer_map.csv`, `input_svgs/`, `input_gltf/`, `metadata/`, `compare/`
+* `EXPORTS_DIR` (`data/exports/`) & `ASSETS_DIR` (`data/assets/`)
 
 ---
 

@@ -6,7 +6,9 @@ from datetime import datetime, date, timedelta
 from agendint import AgendaClient, list_calendars, get_events, hydrate_events
 from casint import AsyncCASClient
 
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps/agenda"))
+from palantint_scripts.config import SCRAPS_AUTO_DIR
+
+DATA_DIR = str(SCRAPS_AUTO_DIR / "agenda")
 os.makedirs(DATA_DIR, exist_ok=True)
 INDEX_PATH = os.path.join(DATA_DIR, "index.json")
 
@@ -66,8 +68,6 @@ async def scrape_agenda(cas_client: AsyncCASClient, progress=None, task_id=None,
         if progress and task_id:
             progress.update(task_id, description=f"  [blue]Scraping Agenda: Initializing session...[/blue]")
         
-        si_client = AgendaClient(cookies=cas_client.cookies)
-        # Modern Login using Credentials from Config (set by TUI)
         u = config.get("username") or os.getenv("CAS_USERNAME")
         p = config.get("password") or os.getenv("CAS_PASSWORD")
         
@@ -75,6 +75,7 @@ async def scrape_agenda(cas_client: AsyncCASClient, progress=None, task_id=None,
             log("  [red]Critical: No credentials provided for SI Ecoles login.[/red]")
             raise RuntimeError("Missing Credentials")
 
+        si_client = AgendaClient()
         if not await si_client.login(username=u, password=p):
             log("  [red]Critical: SI Ecoles rejected the session. Check credentials.[/red]")
             if progress and task_id:

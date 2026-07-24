@@ -7,8 +7,10 @@ from trombint import AsyncTrombiClient
 from trombint.config import ETUDIANTS_URL
 
 # Paths
+from palantint_scripts.config import SCRAPS_AUTO_DIR
+
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
-SCRAPS_DIR = os.path.join(BASE_DIR, "data/scraps")
+SCRAPS_DIR = str(SCRAPS_AUTO_DIR)
 PROFILES_DIR = os.path.join(BASE_DIR, "data/private_assets/profiles")
 LOGOS_DIR = os.path.join(BASE_DIR, "data/assets/logos")
 
@@ -83,6 +85,7 @@ async def scrape_media(cas_client: AsyncCASClient, progress=None, task_id=None, 
     
     u = config.get("username") or os.getenv("CAS_USERNAME") if config else os.getenv("CAS_USERNAME")
     p = config.get("password") or os.getenv("CAS_PASSWORD") if config else os.getenv("CAS_PASSWORD")
+
     t_client = AsyncTrombiClient(username=u, password=p)
     
     async with t_client:

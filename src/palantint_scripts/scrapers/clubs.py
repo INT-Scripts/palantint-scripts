@@ -5,12 +5,14 @@ import json
 from typing import List, Optional
 from pydantic import BaseModel, ValidationError
 
+from palantint_scripts.config import SCRAPS_AUTO_DIR, ASSETS_DIR
+
 API_BASE_URL = os.getenv("CAL_MINET_URL", "https://cal.minet.net")
 ORGS_ENDPOINT = f"{API_BASE_URL}/api/organizations/"
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
-ASSETS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/assets/clubs"))
+DATA_DIR = str(SCRAPS_AUTO_DIR)
+CLUBS_ASSETS_DIR = str(ASSETS_DIR / "clubs")
 os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(ASSETS_DIR, exist_ok=True)
+os.makedirs(CLUBS_ASSETS_DIR, exist_ok=True)
 
 class OrgLinkSchema(BaseModel):
     name: str
@@ -65,7 +67,7 @@ async def download_image(client: httpx.AsyncClient, url: str, slug: str, log=pri
             elif "image/gif" in content_type: ext = "gif"
             
             filename = f"{slug}.{ext}"
-            filepath = os.path.join(ASSETS_DIR, filename)
+            filepath = os.path.join(CLUBS_ASSETS_DIR, filename)
             with open(filepath, "wb") as f:
                 f.write(response.content)
             return f"/api/assets/clubs/{filename}"

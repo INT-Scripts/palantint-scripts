@@ -4,7 +4,7 @@ import uuid
 from typing import Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from db.models import Student, MapMetadata, StudentRelationship, SocialLink, Media, RelationshipType
+from db.models import Student, MapMetadata, ThreeDConfig, StudentRelationship, SocialLink, Media, RelationshipType
 
 async def export_db_data(db_session: AsyncSession, log: Callable = print):
     """
@@ -30,6 +30,18 @@ async def export_db_data(db_session: AsyncSession, log: Callable = print):
     with open(os.path.join(export_dir, "maps.json"), "w", encoding="utf-8") as f:
         json.dump(maps_data, f, indent=4, ensure_ascii=False)
     log(f"[green]✓ Exported {len(maps_data)} map calibrations to maps.json[/green]")
+
+    # 1b. 3D MAP CONFIG (Tile Mappings & Waypoints Vault)
+    log("Archiving [magenta]3D Map Configuration Vault[/magenta] (three_d_config)...")
+    res_3d = await db_session.execute(select(ThreeDConfig).where(ThreeDConfig.key == "default"))
+    cfg_3d = res_3d.scalars().first()
+    c3d_data = {
+        "tile_mappings": cfg_3d.tile_mappings if cfg_3d else {},
+        "markers": cfg_3d.markers if cfg_3d else []
+    }
+    with open(os.path.join(export_dir, "3d_config.json"), "w", encoding="utf-8") as f:
+        json.dump(c3d_data, f, indent=4, ensure_ascii=False)
+    log(f"[green]✓ Exported 3D map configuration to 3d_config.json[/green]")
 
     # 2. SOCIAL LINKS (External Handles Vault)
     log("Archiving [magenta]External Handles Vault[/magenta] (social_links)...")

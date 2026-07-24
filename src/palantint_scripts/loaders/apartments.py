@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.database import AsyncSessionLocal
 from db.models import Student
 
-EXPORT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/exports"))
+from palantint_scripts.config import SCRAPS_AUTO_DIR, EXPORTS_DIR
+
+EXPORT_DIR = str(EXPORTS_DIR)
 
 async def load_apartments(db_session: AsyncSession, progress=None, task_id=None, log=print):
     """
@@ -15,7 +17,7 @@ async def load_apartments(db_session: AsyncSession, progress=None, task_id=None,
     Maisel room details from logements.json into the database.
     """
     json_path = os.path.join(EXPORT_DIR, "apartments.json")
-    scrap_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
+    scrap_dir = str(SCRAPS_AUTO_DIR)
     logements_path = os.path.join(scrap_dir, "logements.json")
 
     # 1. Load Student -> Apartment Mappings

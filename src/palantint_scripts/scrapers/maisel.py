@@ -7,8 +7,10 @@ from casint import CASClient
 
 logger = logging.getLogger("palantint.scrapers.maisel")
 
-SCRAP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
-PLANS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/assets/plans"))
+from palantint_scripts.config import SCRAPS_AUTO_DIR, PLANS_DIR
+
+SCRAP_DIR = str(SCRAPS_AUTO_DIR)
+PLANS_DIR = str(PLANS_DIR)
 
 async def scrape_maisel(cas_client: CASClient = None, progress=None, task_id=None, config: dict = None, log=print):
     delay = config.get("delay", 0.5) if config else 0.5
@@ -26,8 +28,12 @@ async def scrape_maisel(cas_client: CASClient = None, progress=None, task_id=Non
 
     if u and p:
         client = await MaiselINT.create(username=u, password=p)
+    elif cas_client:
+        # Re-authenticate existing CAS session for Maisel portal service via SSO
+        await cas_client.login(service="https://reservations.maisel.imtbs-tsp.eu/carte.php")
+        client = MaiselINT(cookies=cas_client.cookies)
     else:
-        client = MaiselINT(cookies=cas_client.cookies if cas_client else None)
+        client = await MaiselINT.create()
 
     # 1. Scrape Lodging Info
     if progress and task_id:

@@ -19,8 +19,10 @@ def get_svg_size(content):
         if height_m: vh = int(float(height_m.group(1)))
     return vw, vh
 
-def process_foyer_map_csv(root_dir):
-    csv_path = os.path.join(root_dir, "data", "scraps", "foyer_map.csv")
+from palantint_scripts.config import SCRAPS_MANUAL_DIR, BASE_DIR, PLANS_DIR
+
+def process_foyer_map_csv(root_dir=None):
+    csv_path = str(SCRAPS_MANUAL_DIR / "foyer_map.csv")
     if not os.path.exists(csv_path):
         return
 
@@ -40,6 +42,7 @@ def process_foyer_map_csv(root_dir):
                     "building": "Foyer"
                 }
 
+    root_dir = str(BASE_DIR)
     out_dirs = [
         os.path.join(root_dir, "data", "assets", "clubs"),
         os.path.join(root_dir, "frontend", "public", "api", "assets", "clubs")
@@ -53,11 +56,10 @@ def process_foyer_map_csv(root_dir):
     print(f"  → Processed foyer_map.csv ({len(foyer_entries)} room mappings exported to foyer_map.json)")
 
 def main():
-    ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-    INPUT_DIR = os.path.join(ROOT_DIR, "data", "scraps", "input_svgs")
+    ROOT_DIR = str(BASE_DIR)
+    INPUT_DIR = str(SCRAPS_MANUAL_DIR / "input_svgs")
     OUTPUT_DIRS = [
-        os.path.join(ROOT_DIR, "data", "assets", "plans"),
-        os.path.join(ROOT_DIR, "frontend", "public", "api", "assets", "plans")
+        str(PLANS_DIR)
     ]
 
     for d in OUTPUT_DIRS:
@@ -72,15 +74,38 @@ def main():
     print(f"Starting headless SVG processing for {len(svgs)} files...")
 
     EMBEDDED_STYLE = """<style id="plan-theme-styles">
+  :root {
+    --wall-stroke: #475569;
+    --room-label-fill: #1e293b;
+    --room-default-fill: rgba(120, 113, 108, 0.12);
+    --room-default-stroke: rgba(120, 113, 108, 0.4);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --wall-stroke: #e2e8f0;
+      --room-label-fill: #f8fafc;
+    }
+  }
+  .dark {
+    --wall-stroke: #e2e8f0;
+    --room-label-fill: #f8fafc;
+  }
+
+  path.plan-wall {
+    stroke: var(--wall-stroke);
+    stroke-width: 2px;
+    fill: none;
+  }
+
   a[data-room] { cursor: pointer; }
   a[data-room] text, a[data-room] tspan { pointer-events: none !important; user-select: none !important; }
   
   /* 1. Default room fill & stroke */
   a[data-room] .room-area, g[data-room] .room-area, polygon.room-area, path.room-area, rect.room-area {
-    fill: rgba(120, 113, 108, 0.12) !important;
-    stroke: rgba(120, 113, 108, 0.4) !important;
-    stroke-width: 1px !important;
-    pointer-events: all !important;
+    fill: var(--room-default-fill);
+    stroke: var(--room-default-stroke);
+    stroke-width: 1px;
+    pointer-events: all;
     transition: fill 0.15s ease, stroke 0.15s ease;
   }
 
@@ -92,22 +117,44 @@ def main():
     stroke-width: 1.5px !important;
   }
 
-  /* 3. Selected / Active room (Blue Filled) */
+  /* 3. Missing Metadata (Rose) */
+  a[data-room][data-no-meta="true"] .room-area, g[data-room][data-no-meta="true"] .room-area {
+    fill: rgba(244, 63, 94, 0.20) !important;
+    stroke: #f43f5e !important;
+    stroke-width: 1.5px !important;
+  }
+  a[data-room][data-no-meta="true"] .room-label {
+    fill: #f43f5e !important;
+  }
+
+  /* 4. Selected / Active room (Blue Filled) */
   a[data-room][data-active="true"] .room-area, g[data-room][data-active="true"] .room-area,
   a[data-room][data-selected="true"] .room-area, g[data-room][data-selected="true"] .room-area {
     fill: rgba(37, 99, 235, 0.75) !important;
     stroke: #2563eb !important;
     stroke-width: 2.5px !important;
   }
+  a[data-room][data-active="true"] .room-label, a[data-room][data-selected="true"] .room-label {
+    fill: #ffffff !important;
+    font-weight: bold;
+  }
 
-  /* 4. Hover state (Blue) — TOP PRIORITY (Overrides passive orange, active, default) */
+  /* 5. Hover state (Blue) — TOP PRIORITY (Overrides passive orange/rose, active, default) */
   a[data-room]:hover .room-area, a[data-room][data-hover="true"] .room-area,
   a[data-room][data-occupied="true"]:hover .room-area, a[data-room][data-occupied="true"][data-hover="true"] .room-area,
+  a[data-room][data-no-meta="true"]:hover .room-area, a[data-room][data-no-meta="true"][data-hover="true"] .room-area,
   a[data-room][data-active="true"]:hover .room-area, a[data-room][data-active="true"][data-hover="true"] .room-area {
     fill: rgba(59, 130, 246, 0.55) !important;
     stroke: #3b82f6 !important;
     stroke-width: 2.5px !important;
     cursor: pointer !important;
+  }
+  a[data-room]:hover .room-label, a[data-room][data-hover="true"] .room-label {
+    fill: #ffffff !important;
+    font-weight: bold;
+  }
+  .room-label {
+    fill: var(--room-label-fill);
   }
 </style>"""
 
@@ -160,7 +207,7 @@ def main():
             cleaned_text = re.sub(r'\spointer-events=["\'][^"\']*["\']', '', cleaned_text)
             
             # Re-inject our required attributes
-            modified_text = re.sub(r'<text ', r'<text class="room-label" pointer-events="none" fill="white" ', cleaned_text)
+            modified_text = re.sub(r'<text ', r'<text class="room-label" pointer-events="none" ', cleaned_text)
             
             mask = np.zeros((img.shape[0]+2, img.shape[1]+2), dtype=np.uint8)
             cx, cy = max(0, min(cx, img.shape[1]-1)), max(0, min(cy, img.shape[0]-1))
@@ -176,26 +223,38 @@ def main():
                         break
                     img[img == 128], mask[:] = 0, 0
             
-            polygon_fill = 'fill="rgba(120, 113, 108, 0.12)" stroke="rgba(120, 113, 108, 0.4)" stroke-width="1" pointer-events="all"'
+            polygon_fill = 'class="room-area" pointer-events="all"'
             if filled:
                 contours, _ = cv2.findContours(mask[1:-1, 1:-1], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 if contours:
                     c = max(contours, key=cv2.contourArea)
                     approx = cv2.approxPolyDP(c, 0.01 * cv2.arcLength(c, True), True)
                     points_str = " ".join([f"{pt[0][0]/scale:.1f},{pt[0][1]/scale:.1f}" for pt in approx])
-                    polygon = f'<polygon class="room-area" points="{points_str}" {polygon_fill} />'
+                    polygon = f'<polygon points="{points_str}" {polygon_fill} />'
                     img[img == 128] = 0
                     return f'<a data-room="{room_id}" class="cursor-pointer group">\n{polygon}\n{modified_text}\n</a>'
             
             # Fallback to rect if floodfill fails
-            rect = f'<rect class="room-area" x="{x-15}" y="{y-25}" width="60" height="40" rx="0" {polygon_fill} />'
+            rect = f'<rect x="{x-15}" y="{y-25}" width="60" height="40" rx="0" {polygon_fill} />'
             img[img == 128] = 0
             return f'<a data-room="{room_id}" class="cursor-pointer group">\n{rect}\n{modified_text}\n</a>'
 
         new_content = re.sub(r'<text id="([^"]+)"[^>]*>.*?</text>', process_match, content, flags=re.DOTALL)
         new_content = re.sub(r'<rect[^>]*fill="white"[^>]*/>', '', new_content)
-        new_content = re.sub(r'stroke="[^"]+"', r'stroke="white"', new_content)
-        new_content = re.sub(r'stroke-width="[^"]+"', r'stroke-width="2"', new_content)
+        
+        # Mark structural wall paths with class "plan-wall"
+        def add_wall_class(match):
+            tag = match.group(0)
+            if 'class="' in tag:
+                tag = re.sub(r'class="([^"]*)"', r'class="\1 plan-wall"', tag)
+            else:
+                tag = tag.replace('<path ', '<path class="plan-wall" ')
+            # Replace inline stroke if present to allow CSS styling
+            tag = re.sub(r'\sstroke=["\'][^"\']*["\']', '', tag)
+            tag = re.sub(r'\sstroke-width=["\'][^"\']*["\']', '', tag)
+            return tag
+
+        new_content = re.sub(r'<path[^>]*>', add_wall_class, new_content)
 
         if "<style" not in new_content:
             new_content = re.sub(r'(<svg[^>]*?>)', r'\1\n' + EMBEDDED_STYLE, new_content, count=1)
@@ -207,7 +266,48 @@ def main():
     # Also process foyer_map.csv if present
     process_foyer_map_csv(ROOT_DIR)
 
-    print("SVG Processing complete.")
+    # Copy PNG plan assets from input_pngs
+    process_png_plans(ROOT_DIR)
+
+    print("SVG & PNG Plan Processing complete.")
+
+import shutil
+
+def process_png_plans(root_dir=None):
+    png_input_dir = str(SCRAPS_MANUAL_DIR / "input_pngs")
+    if not os.path.exists(png_input_dir):
+        return
+
+    pngs = sorted(glob.glob(os.path.join(png_input_dir, "*.png")))
+    if not pngs:
+        return
+
+    root_dir = str(BASE_DIR)
+    out_dirs = [
+        str(PLANS_DIR)
+    ]
+
+    for d in out_dirs:
+        os.makedirs(d, exist_ok=True)
+
+    copied_count = 0
+    for src in pngs:
+        basename = os.path.basename(src)
+        aliases = [basename]
+        if basename == "Foyer0.png":
+            aliases.extend(["Foyer-0.png", "Foyer_0.png"])
+        elif basename == "Foyer1.png":
+            aliases.extend(["Foyer-1.png", "Foyer_1.png"])
+        elif "-" in basename and not basename.startswith("U5-_-"):
+            aliases.append(basename.replace("-", "_"))
+
+        for out_dir in out_dirs:
+            for alias in set(aliases):
+                dest = os.path.join(out_dir, alias)
+                shutil.copy2(src, dest)
+        copied_count += 1
+
+    print(f"  → Processed {copied_count} PNG plans from input_pngs to data/assets/plans")
 
 if __name__ == "__main__":
     main()

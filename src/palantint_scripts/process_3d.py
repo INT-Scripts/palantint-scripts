@@ -6,10 +6,12 @@ import numpy as np
 import shutil
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).parent.parent.parent.parent
-INPUT_DIR = ROOT_DIR / "data" / "scraps" / "input_gltf"
-TEMP_DIR = ROOT_DIR / "data" / "scraps" / "processing_temp"
-OUTPUT_DIR = ROOT_DIR / "data" / "assets" / "3d"
+from palantint_scripts.config import SCRAPS_MANUAL_DIR, SCRAPS_AUTO_DIR, ASSETS_DIR, BASE_DIR
+
+ROOT_DIR = BASE_DIR
+INPUT_DIR = SCRAPS_MANUAL_DIR / "input_gltf"
+TEMP_DIR = SCRAPS_AUTO_DIR / "processing_temp"
+OUTPUT_DIR = ASSETS_DIR / "3d"
 
 def get_tile_fingerprint(gltf_path):
     """Generates a geometric fingerprint based on the local bounding box."""

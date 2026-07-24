@@ -5,7 +5,9 @@ from datetime import datetime
 from trombint import AsyncTrombiClient
 from casint import AsyncCASClient
 
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/scraps"))
+from palantint_scripts.config import SCRAPS_AUTO_DIR
+
+DATA_DIR = str(SCRAPS_AUTO_DIR)
 os.makedirs(DATA_DIR, exist_ok=True)
 OUTPUT_PATH = os.path.join(DATA_DIR, "students.json")
 
