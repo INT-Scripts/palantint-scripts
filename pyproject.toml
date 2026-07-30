@@ -32,6 +32,13 @@ palantint-sync = "palantint_scripts.sync:main"
 palantint-admin = "palantint_scripts.admin:main"
 palantint-map = "palantint_scripts.map_gen:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=9.1.0",
+    "pytest-asyncio>=1.4.0",
+    "aiosqlite>=0.22.1",
+]
+
 [tool.uv.sources]
 backend = { path = "../backend", editable = true }
 casint = { path = "../int-libraries/packages/casint", editable = true }

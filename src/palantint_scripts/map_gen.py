@@ -52,7 +52,15 @@ def process_foyer_map_csv(root_dir=None):
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "foyer_map.json"), "w", encoding="utf-8") as f:
             json.dump(foyer_entries, f, indent=4, ensure_ascii=False)
-    
+
+    # Also copy the raw CSV into data/assets/clubs — that directory is the
+    # only one bind-mounted into the backend container (as ASSETS_DIR), while
+    # data/scraps/manual is not, so the public /foyer/map endpoint reads it
+    # from there rather than from the source-of-truth location.
+    assets_clubs_csv = os.path.join(root_dir, "data", "assets", "clubs", "foyer_map.csv")
+    with open(csv_path, "r", encoding="utf-8") as src, open(assets_clubs_csv, "w", encoding="utf-8") as dst:
+        dst.write(src.read())
+
     print(f"  → Processed foyer_map.csv ({len(foyer_entries)} room mappings exported to foyer_map.json)")
 
 def main():
