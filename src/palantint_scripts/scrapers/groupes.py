@@ -19,12 +19,42 @@ from agendint import AgendaClient
 
 # ── Configuration ────────────────────────────────────────────────────────────
 from palantint_scripts.config import SCRAPS_AUTO_DIR
+from palantint_scripts.checkpoint import ItemCheckpoint
 
 DATA_DIR = str(SCRAPS_AUTO_DIR)
 os.makedirs(DATA_DIR, exist_ok=True)
 OUTPUT_PATH = os.path.join(DATA_DIR, "groupes.json")
 
 logger = logging.getLogger("palantint-scrapers-groupes")
+
+# ── SI-Etudiants portal endpoints ────────────────────────────────────────────
+# Same portal, same constraints documented in
+# int-libraries/packages/annuairint/docs/endpoints.md (§2b/§2c): a fresh
+# session rejects direct navigation into the Annuaire until it's been entered
+# "for real" once via its main-menu bridge link, and Dossier.aspx additionally
+# requires the Referer of an actually-fetched Contenu.aspx page in that same
+# session (a generic referer causes a genuine server-side error, not just a
+# soft rejection). annuairint implements this correctly for person dossiers
+# (IdTypeObjet=25); this scraper needs the same handshake for group dossiers
+# (IdTypeObjet=28).
+SI_BASE = "https://si-etudiants.imtbs-tsp.eu"
+DEFAULT_URL = f"{SI_BASE}/OpDotNet/Noyau/Default.aspx?"
+NAVIGATION_URL = f"{SI_BASE}/OpDotNet/Eplug/Annuaire/Navigation/Navigation.aspx"
+CONTENU_URL = f"{SI_BASE}/OpDotNet/Eplug/Annuaire/Navigation/Contenu.aspx"
+ANNUAIRE_ENTRY_URL = f"{SI_BASE}/OpDotNet/Eplug/Annuaire/Accueil.aspx"
+ANNUAIRE_ENTRY_APP_ID = "142"
+ANNUAIRE_ENTRY_TYPE_ACCES = "Utilisateur"
+ANNUAIRE_ENTRY_ID_LIEN = "306"
+DOSSIER_URL = f"{SI_BASE}/OpDotNet/eplug/Annuaire/Navigation/Dossier/Dossier.aspx"
+GROUP_DOSSIER_ID_TYPE_OBJET = 28
+
+# The group dossier's "Relations" pave (ucPaveRelations.js) validates NbLignes
+# client-side against ctl04_RangeValidator1, whose maximumvalue is observed
+# live as "100" — a *different*, smaller cap than the 1000-row ceiling
+# documented for the main Annuaire grid (annuairint's NBLIGNES_MAX). Classes
+# bigger than this need real pagination via DataGridPager1 (see below), not a
+# bigger NbLignes value.
+GROUP_RELATIONS_PAGE_SIZE = 100
 
 # ── Playwright Scraper Helper ──────────────────────────────────────────────────
 
@@ -35,16 +65,44 @@ async def wait_for_ajax_spinner(frame, timeout_ms=8000):
     except Exception:
         await asyncio.sleep(1.5)
 
-async def scrape_group_roster(page, group_id, group_name, log):
+async def warm_up_annuaire(page, id_groupe, log):
+    """
+    One-time-per-session bootstrap required by the SI-Etudiants portal before
+    Contenu.aspx/Dossier.aspx accept direct navigation on a fresh login.
+    Returns the Contenu.aspx URL to use as the Referer for subsequent
+    Dossier.aspx requests (see module docstring / §2b, §2c).
+    """
+    entry_url = (
+        f"{ANNUAIRE_ENTRY_URL}"
+        f"?IdApplication={ANNUAIRE_ENTRY_APP_ID}"
+        f"&TypeAcces={ANNUAIRE_ENTRY_TYPE_ACCES}"
+        f"&IdLien={ANNUAIRE_ENTRY_ID_LIEN}"
+        f"&groupe={id_groupe}"
+    )
+    log("  [blue]Syncing Groups: Warming up Annuaire session...[/blue]")
+    await page.goto(entry_url, timeout=30000, referer=DEFAULT_URL)
+    if "OPErreur.aspx" in page.url:
+        raise RuntimeError(f"Annuaire warm-up rejected (landed on {page.url}).")
+
+    await page.goto(CONTENU_URL, timeout=30000, referer=NAVIGATION_URL)
+    if "OPErreur.aspx" in page.url or "Login.aspx" in page.url:
+        raise RuntimeError(f"Annuaire Contenu.aspx request rejected (landed on {page.url}).")
+
+    return page.url
+
+async def scrape_group_roster(page, group_id, group_name, referer, log):
     """
     Scrapes the active student relations for a specific group from the SI-Etudiants Annuaire.
     Navigates to Dossier.aspx and waits for the nested iframe to load.
+    `referer` must be a Contenu.aspx URL actually fetched earlier in this
+    session (see warm_up_annuaire) — a generic referer gets the request
+    server-side rejected before the iframe ever renders.
     """
-    container_url = f"https://si-etudiants.imtbs-tsp.eu/OpDotNet/eplug/Annuaire/Navigation/Dossier/Dossier.aspx?IdObjet={group_id}&IdTypeObjet=28"
-    
+    container_url = f"{DOSSIER_URL}?IdObjet={group_id}&IdTypeObjet={GROUP_DOSSIER_ID_TYPE_OBJET}"
+
     try:
-        await page.goto(container_url, timeout=45000, referer="https://si-etudiants.imtbs-tsp.eu/OpDotNet/Noyau/Default.aspx?")
-        
+        await page.goto(container_url, timeout=45000, referer=referer)
+
         # Wait for the frame to load
         await page.wait_for_selector("iframe[name='frm0'], iframe[src*='OngletStandard']", timeout=15000)
         
@@ -87,45 +145,70 @@ async def scrape_group_roster(page, group_id, group_name, log):
     except Exception:
         pass
 
-    # 4. Adjust NbLignes limit to 1000 to fetch all active student relations on one page
+    # 4. Bump the page size to this widget's actual validated max (100, not
+    # the 1000 used elsewhere on this portal — see GROUP_RELATIONS_PAGE_SIZE).
     try:
-        limit_triggered = await target_context.evaluate("""() => {
+        limit_triggered = await target_context.evaluate(f"""() => {{
             const input = document.getElementById('ctl04_NbLignes') || document.querySelector("input[id*='NbLignes']");
-            if (input && input.value !== '1000') {
-                input.value = '1000';
+            if (input && input.value !== '{GROUP_RELATIONS_PAGE_SIZE}') {{
+                input.value = '{GROUP_RELATIONS_PAGE_SIZE}';
                 FctUcPaveRelations.NbLignesChanged(true);
                 return true;
-            }
+            }}
             return false;
-        }""")
+        }}""")
         if limit_triggered:
             await wait_for_ajax_spinner(target_context)
             await page.wait_for_timeout(500)
     except Exception:
         pass
 
-    # 5. Parse grid contents
-    content = await target_context.content()
-    soup = BeautifulSoup(content, "html.parser")
-    
+    # 5. Parse grid contents, walking DataGridPager1 for classes bigger than
+    # one page (each numbered/next/last pager link posts back through
+    # WebForm_DoCallback('ctl04$DataGridPager1', '<target>,<current>,<total>', ...)).
     members = []
     seen_ids = set()
-    links = soup.find_all("a")
-    for link in links:
-        onclick = link.get("onclick") or ""
-        # Match ouvrirDossierObjet or affDossier (target_id, type_id)
-        match = re.search(r"(?:ouvrirDossierObjet|affDossier)\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)", onclick)
-        if match:
-            student_id = match.group(1)
-            target_type = int(match.group(2))
-            student_name = link.get_text(strip=True)
-            if target_type == 26 and student_name and student_id not in seen_ids:
-                seen_ids.add(student_id)
-                members.append({
-                    "name": student_name,
-                    "id_objet": student_id,
-                    "relation": "Membre"
-                })
+
+    def merge_members(html):
+        for link in BeautifulSoup(html, "html.parser").find_all("a"):
+            onclick = link.get("onclick") or ""
+            # Match ouvrirDossierObjet or affDossier (target_id, type_id)
+            match = re.search(r"(?:ouvrirDossierObjet|affDossier)\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)", onclick)
+            if match:
+                student_id = match.group(1)
+                target_type = int(match.group(2))
+                student_name = link.get_text(strip=True)
+                if target_type == 26 and student_name and student_id not in seen_ids:
+                    seen_ids.add(student_id)
+                    members.append({
+                        "name": student_name,
+                        "id_objet": student_id,
+                        "relation": "Membre"
+                    })
+
+    content = await target_context.content()
+    merge_members(content)
+
+    pager_match = re.search(r"DataGridPager1','\d+,\d+,(\d+)'", content)
+    page_count = int(pager_match.group(1)) if pager_match else 1
+
+    current_page = 1
+    while current_page < page_count:
+        next_page = current_page + 1
+        try:
+            await target_context.evaluate(f"""() => {{
+                OnPageChanged(true, 'Chargement en cours ...');
+                WebForm_DoCallback('ctl04$DataGridPager1', '{next_page},{current_page},{page_count}', OnCallBackPageNumberChanged, null, CallBackError, false);
+            }}""")
+            await wait_for_ajax_spinner(target_context)
+            await page.wait_for_timeout(500)
+            content = await target_context.content()
+            merge_members(content)
+            current_page = next_page
+        except Exception as e:
+            log(f"    [yellow]Warning: pagination stopped early for {group_name} at page {next_page}: {e}[/yellow]")
+            break
+
     return members
 
 # ── Scraper Orchestrator ───────────────────────────────────────────────────────
@@ -142,16 +225,13 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
         progress.update(task_id, description="  [blue]Syncing Groups: Initializing SI session...[/blue]")
 
     # 1. Load existing data for hydration
-    scraped_groups = []
-    if os.path.exists(OUTPUT_PATH):
-        try:
-            with open(OUTPUT_PATH, "r", encoding="utf-8") as f:
-                scraped_groups = json.load(f)
-            log(f"  [cyan]ℹ Hydrated {len(scraped_groups)} groups from local storage.[/cyan]")
-        except Exception as e:
-            log(f"  [yellow]Warning: Failed to load existing groups for hydration: {e}[/yellow]")
-    
-    existing_map = {str(g["id"]): g for g in scraped_groups}
+    checkpoint = ItemCheckpoint(
+        OUTPUT_PATH,
+        save_every=5,
+        to_disk=lambda items: list(items.values()),
+        from_disk=lambda data: {str(g["id"]): g for g in data},
+    )
+    log(f"  [cyan]ℹ Hydrated {len(checkpoint.items)} groups from local storage.[/cyan]")
 
     # 2. Authenticate AgendaClient
     u = config.get("username") or os.getenv("CAS_USERNAME")
@@ -215,7 +295,7 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
         log(f"  [yellow]⚠ Full sync requested. Scoping {len(target_groups)} groups for re-download.[/yellow]")
     else:
         for t in all_targets:
-            if t["id"] not in existing_map:
+            if not checkpoint.done(t["id"]):
                 target_groups.append(t)
         
         skipped = len(all_targets) - len(target_groups)
@@ -251,45 +331,47 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
         await context.add_cookies(pw_cookies)
         
         scrape_page = await context.new_page()
-        await scrape_page.goto("https://si-etudiants.imtbs-tsp.eu/OpDotNet/Noyau/Default.aspx?")
+        await scrape_page.goto(DEFAULT_URL)
         await scrape_page.wait_for_timeout(1000)
 
         try:
-            for idx, group_item in enumerate(target_groups):
+            contenu_referer = await warm_up_annuaire(scrape_page, si_client.id_groupe, log)
+        except Exception as e:
+            log(f"  [red]Critical: Annuaire warm-up failed: {e}[/red]")
+            await browser.close()
+            raise RuntimeError(f"Annuaire warm-up failed: {e}")
+
+        try:
+            for group_item in target_groups:
                 gid, gname = group_item["id"], group_item["name"]
-                
+
                 if progress and task_id:
                     progress.update(task_id, description=f"  [blue]Syncing Groups: Scraping {gname}...[/blue]")
-                    
-                members = await scrape_group_roster(scrape_page, gid, gname, log)
-                
+
+                members = await scrape_group_roster(scrape_page, gid, gname, contenu_referer, log)
+
                 if members is not None:
-                    # Update map and save incrementally only on success
-                    existing_map[gid] = {
-                        "id": gid, 
-                        "name": gname, 
+                    # Record and periodically flush to prevent data loss on crash
+                    checkpoint.record(gid, {
+                        "id": gid,
+                        "name": gname,
                         "members": members,
                         "last_sync": datetime.now().isoformat()
-                    }
-                    
-                    # Periodically save to prevent data loss on crash
-                    if (idx + 1) % 5 == 0 or (idx + 1) == len(target_groups):
-                        with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-                            json.dump(list(existing_map.values()), f, indent=4, ensure_ascii=False)
-                    
+                    })
                     log(f"    [magenta]Scraped {gname}:[/magenta] [cyan]{len(members)} members.[/cyan]")
                 else:
                     log(f"    [red]Skipped {gname} due to retrieval error.[/red]")
-                
+
                 if progress and task_id: progress.update(task_id, advance=1)
                 if delay > 0: await asyncio.sleep(delay)
 
         except Exception as err:
             log(f"  [red]Scraper Error: {err}[/red]")
         finally:
+            checkpoint.flush()
             await browser.close()
 
-    log(f"  [bold green]✓ Sync complete. Total hydrated groups: {len(existing_map)}.[/bold green]")
+    log(f"  [bold green]✓ Sync complete. Total hydrated groups: {len(checkpoint.items)}.[/bold green]")
     
     if progress and task_id:
         progress.update(task_id, description=f"  [green]Syncing Groups: Success.[/green]")

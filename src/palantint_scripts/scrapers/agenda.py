@@ -7,22 +7,11 @@ from agendint import AgendaClient, list_calendars, get_events, hydrate_events
 from casint import AsyncCASClient
 
 from palantint_scripts.config import SCRAPS_AUTO_DIR
+from palantint_scripts.checkpoint import ItemCheckpoint
 
 DATA_DIR = str(SCRAPS_AUTO_DIR / "agenda")
 os.makedirs(DATA_DIR, exist_ok=True)
 INDEX_PATH = os.path.join(DATA_DIR, "index.json")
-
-def _load_index():
-    if os.path.exists(INDEX_PATH):
-        try:
-            with open(INDEX_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except: pass
-    return {}
-
-def _save_index(data):
-    with open(INDEX_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
 
 def _save_calendar(cal_id, events):
     output_path = os.path.join(DATA_DIR, f"{cal_id}.json")
@@ -63,7 +52,7 @@ class MockEvent:
         return self.__dict__
 
 async def scrape_agenda(cas_client: AsyncCASClient, progress=None, task_id=None, config: dict = None, log=print):
-    index_data = _load_index()
+    checkpoint = ItemCheckpoint(INDEX_PATH, save_every=1)
     try:
         if progress and task_id:
             progress.update(task_id, description=f"  [blue]Scraping Agenda: Initializing session...[/blue]")
@@ -125,12 +114,30 @@ async def scrape_agenda(cas_client: AsyncCASClient, progress=None, task_id=None,
             if progress and task_id:
                 progress.update(task_id, description="  [red]Scraping Agenda: 0 agendas found.[/red]", completed=1, total=1)
             return
- 
+
+        # Skip calendars already hydrated under the same depth (agenda_mode) unless a full re-sync was requested
+        if full_sync:
+            harvest_cals = target_cals
+        else:
+            harvest_cals = [
+                c for c in target_cals
+                if not (checkpoint.done(c.id) and checkpoint.get(c.id, {}).get("agenda_mode") == agenda_mode)
+            ]
+            skipped = len(target_cals) - len(harvest_cals)
+            if skipped > 0:
+                log(f"  [green]✓ Skipping {skipped} already hydrated agendas.[/green]")
+
+        if not harvest_cals:
+            log("  [bold green]✓ All target agendas are already hydrated. Nothing to do.[/bold green]")
+            if progress and task_id:
+                progress.update(task_id, description="  [green]Syncing Agenda: Already up to date.[/green]", completed=1, total=1)
+            return
+
         # PHASE 1: Exhaustive Event Harvesting
         if progress and task_id:
-            progress.update(task_id, description=f"  [blue]Scraping Agenda: Harvesting events...[/blue]", total=len(target_cals), completed=0)
-        
-        for cal in target_cals:
+            progress.update(task_id, description=f"  [blue]Scraping Agenda: Harvesting events...[/blue]", total=len(harvest_cals), completed=0)
+
+        for cal in harvest_cals:
             try:
                 if progress and task_id:
                     progress.update(task_id, description=f"  [blue]Syncing Timetables: [magenta]{cal.name}[/magenta]...[/blue]")
@@ -153,19 +160,19 @@ async def scrape_agenda(cas_client: AsyncCASClient, progress=None, task_id=None,
                 ]
 
                 _save_calendar(cal.id, events_list)
-                
-                # Update index state
-                index_data[cal.id] = {
+
+                # Record and flush index state so this calendar is skipped on resume
+                checkpoint.record(cal.id, {
                     "name": cal.name,
                     "event_count": len(events_list),
                     "status": "hydrated",
+                    "agenda_mode": agenda_mode,
                     "last_sync": datetime.now().isoformat()
-                }
-                _save_index(index_data)
-                
+                })
+
             except Exception as e:
                 log(f"  [red]Failed to harvest {cal.name}: {e}[/red]")
-            
+
             if progress and task_id: progress.update(task_id, advance=1)
             if delay > 0: await asyncio.sleep(delay)
 
@@ -178,7 +185,7 @@ async def scrape_agenda(cas_client: AsyncCASClient, progress=None, task_id=None,
         log(f"[red]Agenda Scraper Error: {e}[/red]")
         raise e
     finally:
-        _save_index(index_data)
+        checkpoint.flush()
 
 async def main():
     from dotenv import load_dotenv
