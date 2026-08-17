@@ -103,6 +103,7 @@ PIPELINE_DOMAINS = [
     {"id": "agenda", "name": "Timetables", "scraper": {"name": "Scraping Schedules", "module": "palantint_scripts.scrapers.agenda", "func": "scrape_agenda", "needs_cas": True}, "loader": {"name": "Update Schedules", "module": "palantint_scripts.loaders.agenda", "func": "load_agenda", "needs_db": True}},
     {"id": "media", "name": "Media Assets", "scraper": {"name": "Harvesting Media", "module": "palantint_scripts.scrapers.media", "func": "scrape_media", "needs_cas": True}},
     {"id": "apartments", "name": "Apartments", "scraper": {"name": "Scraping Apartments", "module": "palantint_scripts.scrapers.maisel", "func": "scrape_maisel", "needs_cas": True}, "loader": {"name": "Update Apartments", "module": "palantint_scripts.loaders.apartments", "func": "load_apartments", "needs_db": True}},
+    {"id": "courses", "name": "Course Catalog", "scraper": {"name": "Scraping Courses", "module": "palantint_scripts.scrapers.courses", "func": "scrape_courses"}, "loader": {"name": "Update Courses", "module": "palantint_scripts.loaders.courses", "func": "load_courses", "needs_db": True}},
     {"id": "vault", "name": "OSINT Vault & Calibrations", "loader": {"name": "Restore OSINT Vault", "module": "palantint_scripts.loaders.vault", "func": "load_vault", "needs_db": True}}
 ]
 

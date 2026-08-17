@@ -45,6 +45,11 @@ class AgendaEventSchema(BaseModel):
     name: str | None = None
     date: str | None = None
 
+class CourseSchema(BaseModel):
+    id: str
+    title: str
+    ecoles: List[str] = []
+
 # ── Verification Routines ──────────────────────────────────────────────────
 
 def verify_apartments_schema() -> Dict[str, Any]:
@@ -104,6 +109,39 @@ def verify_students_schema() -> Dict[str, Any]:
 
     return stats
 
+def verify_courses_schema() -> Dict[str, Any]:
+    """The course catalog scrape wraps its records in
+    {fetched_at, counts, courses, errors}; failed course sheets are reported
+    in the file itself and counted as errors here."""
+    file_path = os.path.join(DATA_DIR, "courses.json")
+    stats = {"total": 0, "valid": 0, "errors": 0, "details": []}
+    if not os.path.exists(file_path):
+        return {"error": f"File not found: {file_path}"}
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+
+        courses = payload.get("courses", []) if isinstance(payload, dict) else payload
+        scrape_errors = payload.get("errors", []) if isinstance(payload, dict) else []
+
+        stats["total"] = len(courses)
+        for idx, course in enumerate(courses):
+            try:
+                CourseSchema.model_validate(course)
+                stats["valid"] += 1
+            except ValidationError as ve:
+                stats["errors"] += 1
+                stats["details"].append(f"Course #{idx} ({course.get('id')}): {ve}")
+
+        for err in scrape_errors:
+            stats["errors"] += 1
+            stats["details"].append(f"Course {err.get('id')} not harvested: {err.get('error')}")
+    except Exception as e:
+        return {"error": str(e)}
+
+    return stats
+
 def run_all_verifications():
     console.print("\n[bold blue]PalantINT — Scraper & Data Schema Audit[/bold blue]\n")
 
@@ -136,6 +174,14 @@ def run_all_verifications():
     else:
         status = "[green]OK[/green]" if stud_res["errors"] == 0 else "[yellow]SOFT FAIL / DISCREPANCY[/yellow]"
         table.add_row("Student Directory", str(stud_res["total"]), str(stud_res["valid"]), str(stud_res["errors"]), status)
+
+    # Course Catalog
+    courses_res = verify_courses_schema()
+    if "error" in courses_res and courses_res.get("total", 0) == 0:
+        table.add_row("Course Catalog", "0", "0", "1", f"[yellow]{courses_res['error']}[/yellow]")
+    else:
+        status = "[green]OK[/green]" if courses_res["errors"] == 0 else "[yellow]SOFT FAIL / DISCREPANCY[/yellow]"
+        table.add_row("Course Catalog", str(courses_res["total"]), str(courses_res["valid"]), str(courses_res["errors"]), status)
 
     console.print(table)
     console.print("\n[dim]Audit finished.[/dim]\n")

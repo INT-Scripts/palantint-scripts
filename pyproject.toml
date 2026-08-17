@@ -22,6 +22,7 @@ dependencies = [
     "trombint",
     "maiselint",
     "agendint",
+    "intllabus",
     "backend",
     "playwright>=1.60.0",
 ]
@@ -45,6 +46,7 @@ casint = { path = "../int-libraries/packages/casint", editable = true }
 trombint = { path = "../int-libraries/packages/trombint", editable = true }
 maiselint = { path = "../int-libraries/packages/maiselint", editable = true }
 agendint = { path = "../int-libraries/packages/agendint", editable = true }
+intllabus = { path = "../int-libraries/packages/intllabus", editable = true }
 
 [build-system]
 requires = ["hatchling"]
