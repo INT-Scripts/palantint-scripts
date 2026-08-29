@@ -51,7 +51,10 @@ async def _get_person_by_trombint(db_session: AsyncSession, trombint_id: str) ->
 async def _get_or_create_location(db_session: AsyncSession, kind: str, code: str, parent_id=None) -> Location | None:
     if not code:
         return None
-    result = await db_session.execute(select(Location).where(Location.kind == kind, Location.code == code))
+    stmt = select(Location).where(Location.kind == kind, Location.code == code)
+    if parent_id is not None:
+        stmt = stmt.where(Location.parent_id == parent_id)
+    result = await db_session.execute(stmt)
     loc = result.scalars().first()
     if not loc:
         loc = Location(kind=kind, code=code, name=code, parent_id=parent_id)
