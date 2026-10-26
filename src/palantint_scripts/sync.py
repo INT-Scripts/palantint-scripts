@@ -309,7 +309,14 @@ async def run_pipeline(args=None):
         # ── 2. Task Mapping ──────────────────────────────────────────────────
         mode_scrape, mode_load, mode_export = state.phase == "scrape_only", state.phase == "load_only", state.phase == "export_only"
         
-        active_scrapers = [d["scraper"] for d in PIPELINE_DOMAINS if d["id"] in state.selected_ids and "scraper" in d] if mode_scrape else []
+        scraper_domains = [d for d in PIPELINE_DOMAINS if d["id"] in state.selected_ids and "scraper" in d] if mode_scrape else []
+        # Group discovery reads hydrated agenda event labels and SI group ids.
+        agenda_position = next((i for i, d in enumerate(scraper_domains) if d["id"] == "agenda"), None)
+        group_position = next((i for i, d in enumerate(scraper_domains) if d["id"] == "groupes"), None)
+        if agenda_position is not None and group_position is not None and agenda_position > group_position:
+            agenda_domain = scraper_domains.pop(agenda_position)
+            scraper_domains.insert(group_position, agenda_domain)
+        active_scrapers = [d["scraper"] for d in scraper_domains]
         active_loaders = []
         if mode_load:
             if state.db_strategy == "purge": active_loaders.append({"name": "Wipe Database", "module": None})

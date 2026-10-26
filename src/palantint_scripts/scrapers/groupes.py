@@ -11,7 +11,7 @@ import json
 import os
 import re
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from casint import AsyncCASClient
 from playwright.async_api import async_playwright
@@ -20,12 +20,62 @@ from agendint import AgendaClient
 # ── Configuration ────────────────────────────────────────────────────────────
 from palantint_scripts.config import SCRAPS_AUTO_DIR
 from palantint_scripts.checkpoint import ItemCheckpoint
+from palantint_scripts.utils import normalize_name
 
 DATA_DIR = str(SCRAPS_AUTO_DIR)
 os.makedirs(DATA_DIR, exist_ok=True)
 OUTPUT_PATH = os.path.join(DATA_DIR, "groupes.json")
+SCOPE_PATH = SCRAPS_AUTO_DIR / "groupes_scope.json"
+
+
+def _save_scope(status: str, targets: list[dict]) -> None:
+    scope = {
+        "status": status,
+        "target_ids": [group["id"] for group in targets],
+        "last_sync": datetime.now().isoformat(),
+    }
+    temporary_path = SCOPE_PATH.with_suffix(".tmp")
+    temporary_path.write_text(json.dumps(scope, ensure_ascii=False), encoding="utf-8")
+    os.replace(temporary_path, SCOPE_PATH)
 
 logger = logging.getLogger("palantint-scrapers-groupes")
+
+
+def _agenda_group_targets() -> tuple[dict[str, str], set[str]]:
+    """Return current event group object ids and labels from hydrated agendas."""
+    agenda_dir = SCRAPS_AUTO_DIR / "agenda"
+    index_path = agenda_dir / "index.json"
+    if not index_path.exists():
+        return {}, set()
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    scope_path = agenda_dir / "scope.json"
+    scoped_ids = None
+    if scope_path.exists():
+        scope = json.loads(scope_path.read_text(encoding="utf-8"))
+        if scope.get("status") == "running":
+            raise RuntimeError("Course agenda snapshot is still being scraped")
+        if scope.get("status") == "complete":
+            scoped_ids = set(scope["calendar_ids"])
+    cutoff = datetime.now() - timedelta(days=30)
+    ids: dict[str, str] = {}
+    labels: set[str] = set()
+    for calendar_id, info in index.items():
+        if scoped_ids is not None and calendar_id not in scoped_ids:
+            continue
+        try:
+            if datetime.fromisoformat(info["last_sync"]) < cutoff:
+                continue
+        except (KeyError, ValueError):
+            continue
+        event_path = agenda_dir / f"{calendar_id}.json"
+        if not event_path.exists():
+            continue
+        for event in json.loads(event_path.read_text(encoding="utf-8")):
+            labels.update(normalize_name(name) for name in event.get("groups") or [] if name)
+            for name, group_id in (event.get("group_ids") or {}).items():
+                if str(group_id).isdigit():
+                    ids[str(group_id)] = name
+    return ids, labels
 
 # ── SI-Etudiants portal endpoints ────────────────────────────────────────────
 # Same portal, same constraints documented in
@@ -215,8 +265,7 @@ async def scrape_group_roster(page, group_id, group_name, referer, log):
 
 async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None, config: dict = {}, log=print):
     """
-    Scrapes SI-Etudiants group memberships for EI1/EI2 cohorts using Playwright and AsyncCASClient cookies.
-    Implements hydration logic to skip already scraped groups unless full_sync is requested.
+    Scrapes rosters for groups referenced by current hydrated agenda events.
     """
     delay = config.get("delay", 0.2)
     full_sync = config.get("full_sync", False)
@@ -261,32 +310,41 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
         log(f"  [red]Failed to load local manifest: {e}[/red]")
         raise RuntimeError(f"Failed to load groups manifest: {e}")
 
-    # 4. Filter groups for target cohorts
-    all_targets = []
+    # 4. Resolve every group used by current course events, across cohorts.
+    discovered_ids, active_labels = _agenda_group_targets()
+    if not discovered_ids and not active_labels:
+        raise RuntimeError("No current agenda group labels found; scrape agendas before groups")
+    target_by_id = {group_id: {"id": group_id, "name": name} for group_id, name in discovered_ids.items()}
+    labels_with_live_ids = {normalize_name(name) for name in discovered_ids.values()}
+    fallback_labels = active_labels - labels_with_live_ids
     for g in all_groups:
         id_str = str(g.get("id", ""))
         name = g.get("name", "")
-        name_lower = name.lower()
-        
-        is_main_cohort = name in ["CL_FI-EI1", "CL_FI-EI2"]
-        is_project_subgroup = id_str.isdigit() and int(id_str) >= 100000 and any(x in name_lower for x in ["ei1", "ei2"])
-        is_gp_prefix = name_lower.startswith("gp-")
-        has_cohort_marker = any(x in name_lower for x in ["ei1", "ei2"])
-        has_subgroup_marker = any(x in name_lower for x in [
-            "tdg", "tdgr", "-g1", "-g2", "-g3", "-g4",
-            "-tpa", "-tpb", "-tpc", "-tpd", "-tpe", "-tpf",
-            "-tpg", "-tph", "-tpi", "-tpj",
-        ])
-        is_academic_subgroup = is_gp_prefix and has_cohort_marker and has_subgroup_marker
-        is_lsh = any(x in name_lower for x in ["lsh", "hum", "sh-"])
-        is_lang = any(x in name_lower for x in ["lang", "lv1", "lv2", "lv3", "ang", "eng", "all", "esp", "chi", "ara", "jap", "fle"])
-        is_option = any(x in name_lower for x in ["option", "voie", "parcours", "dd", "double-diplome"])
-        is_cohort_level = any(x in name_lower for x in ["1a", "2a", "ei1", "ei2", "em1", "em2", "p1", "p2", "p3", "p4", "fisa", "app"])
-        
-        is_target_extra = is_gp_prefix and (is_lsh or is_lang or is_option) and is_cohort_level
-        
-        if is_main_cohort or is_project_subgroup or is_academic_subgroup or is_target_extra:
-            all_targets.append({"id": id_str, "name": name})
+        if id_str.isdigit() and normalize_name(name) in fallback_labels:
+            target_by_id.setdefault(id_str, {"id": id_str, "name": name})
+    all_targets = list(target_by_id.values())
+    requested_ids = {str(group_id) for group_id in config.get("group_ids", [])}
+    if requested_ids:
+        all_targets = [group for group in all_targets if group["id"] in requested_ids]
+        missing_ids = requested_ids - {group["id"] for group in all_targets}
+        if missing_ids:
+            raise ValueError(f"Group ids absent from current agendas: {', '.join(sorted(missing_ids))}")
+    else:
+        # A complete roster snapshot is safe to use for closing stale
+        # memberships only after every listed course calendar was refreshed.
+        catalog = [c.id for c in await si_client.list_calendars() if c.category == "Projets"]
+        agenda_index = json.loads((SCRAPS_AUTO_DIR / "agenda" / "index.json").read_text(encoding="utf-8"))
+        today = datetime.now().date().isoformat()
+        missing_calendars = [
+            cal_id for cal_id in catalog
+            if agenda_index.get(cal_id, {}).get("schema_version") != 2
+            or not str(agenda_index.get(cal_id, {}).get("last_sync", "")).startswith(today)
+            or agenda_index.get(cal_id, {}).get("agenda_mode") in ("quick",)
+            or not (SCRAPS_AUTO_DIR / "agenda" / f"{cal_id}.json").exists()
+        ]
+        if missing_calendars:
+            raise RuntimeError(f"Refresh all {len(missing_calendars)} remaining course calendars before full group sync")
+        _save_scope("running", all_targets)
 
     # 5. Determine which groups actually need scraping
     target_groups = []
@@ -295,7 +353,10 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
         log(f"  [yellow]⚠ Full sync requested. Scoping {len(target_groups)} groups for re-download.[/yellow]")
     else:
         for t in all_targets:
-            if not checkpoint.done(t["id"]):
+            if not (
+                checkpoint.done(t["id"])
+                and str(checkpoint.get(t["id"], {}).get("last_sync", "")).startswith(datetime.now().date().isoformat())
+            ):
                 target_groups.append(t)
         
         skipped = len(all_targets) - len(target_groups)
@@ -304,6 +365,8 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
         log(f"  [blue]Scoping {len(target_groups)} new/missing groups for scraping.[/blue]")
 
     if not target_groups:
+        if not requested_ids:
+            _save_scope("complete", all_targets)
         log("  [bold green]✓ All target groups are already hydrated. Nothing to do.[/bold green]")
         if progress and task_id:
             progress.update(task_id, description="  [green]Syncing Groups: Already up to date.[/green]", completed=1, total=1)
@@ -341,6 +404,7 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
             await browser.close()
             raise RuntimeError(f"Annuaire warm-up failed: {e}")
 
+        failed_groups = []
         try:
             for group_item in target_groups:
                 gid, gname = group_item["id"], group_item["name"]
@@ -360,6 +424,7 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
                     })
                     log(f"    [magenta]Scraped {gname}:[/magenta] [cyan]{len(members)} members.[/cyan]")
                 else:
+                    failed_groups.append(gid)
                     log(f"    [red]Skipped {gname} due to retrieval error.[/red]")
 
                 if progress and task_id: progress.update(task_id, advance=1)
@@ -367,11 +432,16 @@ async def scrape_groupes(cas_client: AsyncCASClient, progress=None, task_id=None
 
         except Exception as err:
             log(f"  [red]Scraper Error: {err}[/red]")
+            raise
         finally:
             checkpoint.flush()
             await browser.close()
 
     log(f"  [bold green]✓ Sync complete. Total hydrated groups: {len(checkpoint.items)}.[/bold green]")
+    if failed_groups:
+        raise RuntimeError(f"Group roster retrieval failed for: {', '.join(failed_groups)}")
+    if not requested_ids:
+        _save_scope("complete", all_targets)
     
     if progress and task_id:
         progress.update(task_id, description=f"  [green]Syncing Groups: Success.[/green]")

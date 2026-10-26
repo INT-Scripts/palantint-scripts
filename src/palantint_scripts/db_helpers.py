@@ -188,11 +188,13 @@ async def close_stale_memberships(
     person_id: uuid.UUID,
     organization_kind: str,
     keep_organization_ids: set,
+    source_code: Optional[str] = None,
 ) -> int:
     """Close out (set ended_at) active memberships of the given kind for this
     person that aren't in `keep_organization_ids`. Preserves history instead
     of delete+reinsert. Returns the number of rows closed."""
-    result = await db_session.execute(
+    source_id = await get_data_source_id(db_session, source_code) if source_code else None
+    stmt = (
         select(OrganizationMembership)
         .join(Organization, Organization.id == OrganizationMembership.organization_id)
         .where(
@@ -202,6 +204,9 @@ async def close_stale_memberships(
             OrganizationMembership.organization_id.not_in(keep_organization_ids) if keep_organization_ids else True,
         )
     )
+    if source_id:
+        stmt = stmt.where(OrganizationMembership.source_id == source_id)
+    result = await db_session.execute(stmt)
     stale = result.scalars().all()
     now = utc_now()
     for m in stale:

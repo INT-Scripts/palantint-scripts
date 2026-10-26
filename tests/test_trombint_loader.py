@@ -3,6 +3,7 @@ from sqlalchemy import select
 
 from db.models import ExternalIdentity, Organization, OrganizationMembership, Person
 from palantint_scripts.loaders import trombint as trombint_loader
+from palantint_scripts.db_helpers import get_data_source_id
 
 from tests.conftest import write_json
 
@@ -53,6 +54,27 @@ async def test_load_trombint_creates_person_and_identity_and_promo(db_session, t
     )
     promo = result.scalars().first()
     assert promo.name == "Ingénieur 1ère année"
+
+
+@pytest.mark.asyncio
+async def test_load_trombint_links_existing_si_student_by_name(db_session, tmp_path, monkeypatch):
+    student = Person(kind="STUDENT", first_name="Florian", last_name="RIVIÈRE")
+    db_session.add(student)
+    await db_session.flush()
+    si_source = await get_data_source_id(db_session, "groupes")
+    db_session.add(ExternalIdentity(person_id=student.id, source_id=si_source, external_id="41581"))
+    monkeypatch.setattr(trombint_loader, "DATA_DIR", str(tmp_path))
+    write_json(tmp_path, "students.json", [
+        {"uid": "friviere", "nom_complet": "Florian RIVIÈRE", "email": "florian@example.com"},
+    ])
+
+    await trombint_loader.load_trombint(db_session)
+
+    people = (await db_session.execute(select(Person))).scalars().all()
+    identities = (await db_session.execute(select(ExternalIdentity))).scalars().all()
+    assert len(people) == 1
+    assert {identity.external_id for identity in identities} == {"41581", "friviere"}
+    assert people[0].email == "florian@example.com"
 
 
 @pytest.mark.asyncio

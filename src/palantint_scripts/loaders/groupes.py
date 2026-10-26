@@ -2,18 +2,21 @@ import asyncio
 import json
 import os
 import re
+import uuid
+from pathlib import Path
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from db.database import AsyncSessionLocal
-from db.models import Organization, OrganizationMembership, Person
+from db.models import ExternalIdentity, Organization, OrganizationMembership, Person
 from palantint_scripts.utils import normalize_name
 
 from palantint_scripts.config import SCRAPS_AUTO_DIR
 from palantint_scripts.db_helpers import (
     close_stale_memberships,
     finish_ingestion_run,
+    get_data_source_id,
     get_or_create_organization,
     start_ingestion_run,
     sync_membership,
@@ -33,40 +36,44 @@ PROMO_TO_BASE_GROUP = {
     ("IMT-BS", "Management 3ème année"): "Gp-EM3",
 }
 
-_GROUP_RE = re.compile(r"([Gg][Pp]-[A-Z]+[0-9])(-[A-Za-z0-9]+)?")
+_GROUP_RE = re.compile(r"(?i)^(gp-[a-z]+[0-9])(?:-(.+))?$")
 
 
 def parse_hierarchy_chain(gname: str) -> List[str]:
     """Expand a raw group name into its ancestor chain, root first, e.g.
     "Gp-EI1-G2a" -> ["Gp-EI1", "Gp-EI1-G", "Gp-EI1-G2", "Gp-EI1-G2a"].
-    Each entry's parent in the returned list is the entry before it — this is
-    a deliberate simplification of the old regex-only inference (which had no
-    real notion of a tree at all) into an actual, if opinionated, hierarchy.
-    Names that don't match the Gp-XXN pattern are treated as flat, single
-    level groups.
+    Course-specific suffixes retain their full prefix, so a membership in
+    Gp-EI2-SIC4103-G1 does not imply membership in the unrelated Gp-EI2-G.
+    Names outside the Gp-XXN pattern stay flat.
     """
     m = _GROUP_RE.match(gname)
     if not m:
         return [gname]
 
-    base = m.group(1)  # e.g. "Gp-EI1"
-    suffix = m.group(2) or ""  # e.g. "-G2a"
-
+    base = m.group(1)
+    suffix = m.group(2)
     chain = [base]
-
-    promo_name = f"{base}-G"
-    if promo_name not in chain:
-        chain.append(promo_name)
-
-    if len(suffix) >= 3:  # e.g. "-G2a" -> also register "-G2"
-        sub_parent_name = f"{base}{suffix[:len(suffix) - 1]}"
-        if sub_parent_name not in chain:
-            chain.append(sub_parent_name)
-
-    if gname not in chain:
-        chain.append(gname)
-
+    if not suffix:
+        return chain
+    segments = suffix.split("-")
+    if len(segments) == 1 and segments[0].lower().startswith("g"):
+        chain.append(f"{base}-G")
+        if re.fullmatch(r"(?i)G\d+[a-z]", segments[0]):
+            chain.append(f"{base}-{segments[0][:-1]}")
+    for index in range(1, len(segments) + 1):
+        candidate = f"{base}-{'-'.join(segments[:index])}"
+        if candidate not in chain:
+            chain.append(candidate)
     return chain
+
+
+def _roster_name_parts(name: str) -> tuple[str, str]:
+    """SI Annuaire lists family names in uppercase before given names."""
+    parts = name.split()
+    boundary = next((i for i, part in enumerate(parts) if part != part.upper()), len(parts))
+    if boundary == len(parts):
+        boundary = max(1, len(parts) - 1)
+    return " ".join(parts[boundary:]), " ".join(parts[:boundary])
 
 
 async def _get_or_create_chain(db_session: AsyncSession, chain: List[str]) -> dict:
@@ -77,6 +84,8 @@ async def _get_or_create_chain(db_session: AsyncSession, chain: List[str]) -> di
     parent_id = None
     for name in chain:
         org = await get_or_create_organization(db_session, kind="CLASS_GROUP", name=name, parent_id=parent_id)
+        if org.kind == "CLASS_GROUP" and org.parent_id != parent_id:
+            org.parent_id = parent_id
         orgs[name] = org
         parent_id = org.id
     return orgs
@@ -98,7 +107,22 @@ async def load_groupes(db_session: AsyncSession, progress=None, task_id=None, lo
     with open(json_path, "r", encoding="utf-8") as f:
         groupes_data = json.load(f)
 
-    if not groupes_data:
+    complete_scope = False
+    scope_path = Path(DATA_DIR) / "groupes_scope.json"
+    if scope_path.exists():
+        scope = json.loads(scope_path.read_text(encoding="utf-8"))
+        if scope.get("status") == "running":
+            raise RuntimeError("Group roster snapshot is still being scraped")
+        if scope.get("status") == "complete":
+            target_ids = set(scope.get("target_ids", []))
+            available_ids = {str(group.get("id")) for group in groupes_data}
+            missing_ids = target_ids - available_ids
+            if missing_ids:
+                raise RuntimeError(f"Missing {len(missing_ids)} groups from completed roster snapshot")
+            groupes_data = [group for group in groupes_data if str(group.get("id")) in target_ids]
+            complete_scope = True
+
+    if not groupes_data and not complete_scope:
         if progress and task_id:
             progress.update(task_id, description="  [yellow]Load Groups: JSON empty. Skipped.[/yellow]", completed=1, total=1)
         return
@@ -112,12 +136,52 @@ async def load_groupes(db_session: AsyncSession, progress=None, task_id=None, lo
         result = await db_session.execute(select(Person).where(Person.kind == "STUDENT"))
         all_students = result.scalars().all()
 
-        student_map = {}
+        student_map: dict[str, set] = {}
         for s in all_students:
             n1 = normalize_name(f"{s.first_name}{s.last_name}")
             n2 = normalize_name(f"{s.last_name}{s.first_name}")
-            if n1: student_map[n1] = s
-            if n2: student_map[n2] = s
+            if n1: student_map.setdefault(n1, set()).add(s.id)
+            if n2: student_map.setdefault(n2, set()).add(s.id)
+
+        source_id = await get_data_source_id(db_session, SOURCE_CODE)
+        identity_rows = await db_session.execute(select(ExternalIdentity).where(ExternalIdentity.source_id == source_id))
+        identity_by_external_id = {identity.external_id: identity for identity in identity_rows.scalars()}
+        resolved_roster_ids: dict[str, uuid.UUID] = {}
+        for group_info in groupes_data:
+            for member in group_info.get("members", []):
+                external_id = str(member.get("id_objet") or "")
+                name = member.get("name") or ""
+                normalized = normalize_name(name)
+                if not normalized:
+                    continue
+                if external_id in resolved_roster_ids:
+                    continue
+                identity = identity_by_external_id.get(external_id) if external_id else None
+                if identity:
+                    person_id = identity.person_id
+                else:
+                    candidates = student_map.get(normalized, set())
+                    if len(candidates) > 1:
+                        log(f"[yellow]Ambiguous roster identity {external_id}; skipping.[/yellow]")
+                        continue
+                    if candidates:
+                        person_id = next(iter(candidates))
+                    else:
+                        if not external_id:
+                            continue
+                        first_name, last_name = _roster_name_parts(name)
+                        person = Person(kind="STUDENT", first_name=first_name, last_name=last_name)
+                        db_session.add(person)
+                        await db_session.flush()
+                        person_id = person.id
+                        all_students.append(person)
+                        student_map.setdefault(normalized, set()).add(person_id)
+                    if external_id:
+                        identity = ExternalIdentity(person_id=person_id, source_id=source_id, external_id=external_id)
+                        db_session.add(identity)
+                        identity_by_external_id[external_id] = identity
+                if external_id:
+                    resolved_roster_ids[external_id] = person_id
 
         if progress and task_id:
             progress.update(task_id, description=f"  [blue]Load Groups: Syncing {len(groupes_data)} groups...[/blue]", total=len(groupes_data), completed=0)
@@ -130,11 +194,14 @@ async def load_groupes(db_session: AsyncSession, progress=None, task_id=None, lo
 
         for group_info in groupes_data:
             gname = group_info["name"]
-            member_ids = {
-                student_map[normalize_name(m["name"])].id
-                for m in group_info.get("members", [])
-                if normalize_name(m["name"]) in student_map
-            }
+            member_ids = set()
+            for member in group_info.get("members", []):
+                external_id = str(member.get("id_objet") or "")
+                normalized = normalize_name(member.get("name") or "")
+                if external_id in resolved_roster_ids:
+                    member_ids.add(resolved_roster_ids[external_id])
+                elif len(student_map.get(normalized, set())) == 1:
+                    member_ids.update(student_map[normalized])
 
             chain = parse_hierarchy_chain(gname)
             chain_orgs = await _get_or_create_chain(db_session, chain)
@@ -147,8 +214,9 @@ async def load_groupes(db_session: AsyncSession, progress=None, task_id=None, lo
             if progress and task_id: progress.update(task_id, advance=1)
 
         # 3. Promo-based fallback for students missing from any Gp- group
-        log("Applying promo-based global group fallbacks...")
-        for s in all_students:
+        if not complete_scope:
+            log("Applying promo-based global group fallbacks...")
+        for s in ([] if complete_scope else all_students):
             if s.id in students_with_groups:
                 continue
 
@@ -187,17 +255,22 @@ async def load_groupes(db_session: AsyncSession, progress=None, task_id=None, lo
 
             if target_gp:
                 chain = parse_hierarchy_chain(target_gp)
+                if len(chain) == 1 and target_gp.lower().startswith("gp-"):
+                    chain.append(f"{target_gp}-G")
                 chain_orgs = await _get_or_create_chain(db_session, chain)
                 target_memberships.setdefault(s.id, set()).update(o.id for o in chain_orgs.values())
 
         # 4. Sync memberships: activate targets, close out anything no longer current.
         log("Syncing class-group memberships...")
+        if complete_scope:
+            for student in all_students:
+                target_memberships.setdefault(student.id, set())
         deactivated_count = 0
         for person_id, org_ids in target_memberships.items():
             for org_id in org_ids:
                 await sync_membership(db_session, person_id, org_id, source_code=SOURCE_CODE)
                 updated_count += 1
-            deactivated_count += await close_stale_memberships(db_session, person_id, "CLASS_GROUP", org_ids)
+            deactivated_count += await close_stale_memberships(db_session, person_id, "CLASS_GROUP", org_ids, source_code=SOURCE_CODE)
 
         await db_session.flush()
         await finish_ingestion_run(db_session, run, status="SUCCESS", updated=updated_count, deactivated=deactivated_count)

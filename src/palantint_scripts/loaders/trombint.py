@@ -6,6 +6,7 @@ from sqlalchemy import select, update
 
 from db.database import AsyncSessionLocal
 from db.models import ExternalIdentity, Person
+from palantint_scripts.utils import normalize_name
 
 from palantint_scripts.config import SCRAPS_AUTO_DIR
 from palantint_scripts.db_helpers import (
@@ -57,6 +58,17 @@ async def load_trombint(db_session: AsyncSession, progress=None, task_id=None, l
     now = utc_now()
 
     try:
+        source_id = await get_data_source_id(db_session, SOURCE_CODE)
+        identities = await db_session.execute(select(ExternalIdentity).where(ExternalIdentity.source_id == source_id))
+        identity_by_uid = {identity.external_id: identity.person_id for identity in identities.scalars()}
+        already_linked = set(identity_by_uid.values())
+        people = await db_session.execute(select(Person).where(Person.kind == "STUDENT"))
+        people_by_name: dict[str, set] = {}
+        for candidate in people.scalars():
+            key = normalize_name(f"{candidate.first_name}{candidate.last_name}")
+            if key:
+                people_by_name.setdefault(key, set()).add(candidate.id)
+
         for s in all_students_data:
             uid = s.get("uid") or s.get("trombint_id")
             if not uid: continue
@@ -64,20 +76,32 @@ async def load_trombint(db_session: AsyncSession, progress=None, task_id=None, l
 
             first_name, last_name = _format_name(s.get("nom_complet", f"{s.get('first_name', '')} {s.get('last_name', '')}"))
 
-            person, created = await upsert_person_by_external_id(
-                db_session,
-                source_code=SOURCE_CODE,
-                external_id=uid,
-                kind="STUDENT",
-                fields={
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "email": s.get("email", ""),
-                    "profile_picture_path": s.get("photo_url", s.get("profile_picture_path", "")),
-                    "is_active": True,
-                    "last_seen_at": now,
-                },
-            )
+            fields = {
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": s.get("email", ""),
+                "profile_picture_path": s.get("photo_url", s.get("profile_picture_path", "")),
+                "is_active": True,
+                "last_seen_at": now,
+            }
+            normalized = normalize_name(f"{first_name}{last_name}")
+            candidates = people_by_name.get(normalized, set()) - already_linked
+            if uid not in identity_by_uid and len(candidates) == 1:
+                person = await db_session.get(Person, next(iter(candidates)))
+                for key, value in fields.items():
+                    if value is not None:
+                        setattr(person, key, value)
+                db_session.add(ExternalIdentity(person_id=person.id, source_id=source_id, external_id=uid))
+                await db_session.flush()
+                created = False
+            else:
+                person, created = await upsert_person_by_external_id(
+                    db_session, source_code=SOURCE_CODE, external_id=uid,
+                    kind="STUDENT", fields=fields,
+                )
+            identity_by_uid[uid] = person.id
+            already_linked.add(person.id)
+            people_by_name.setdefault(normalized, set()).add(person.id)
             created_count += int(created)
             updated_count += int(not created)
 
@@ -89,7 +113,7 @@ async def load_trombint(db_session: AsyncSession, progress=None, task_id=None, l
             if promo_name:
                 promo_org = await get_or_create_organization(db_session, kind="PROMO", name=promo_name)
                 await sync_membership(db_session, person.id, promo_org.id, source_code=SOURCE_CODE)
-                await close_stale_memberships(db_session, person.id, "PROMO", {promo_org.id})
+                await close_stale_memberships(db_session, person.id, "PROMO", {promo_org.id}, source_code=SOURCE_CODE)
 
             if progress and task_id: progress.update(task_id, advance=1)
 
