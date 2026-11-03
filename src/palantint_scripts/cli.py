@@ -50,7 +50,7 @@ async def interactive_menu():
             other_choice = await apply_nav_keys(questionary.select(
                 "Select Utility Tool:",
                 choices=[
-                    questionary.Choice("🗺️  2D Map Vector Processing (Generate floor SVGs)", value="map"),
+                    questionary.Choice("🗺️  Conversion des plans vectoriels en GeoJSON", value="map"),
                     questionary.Choice("📦 3D Asset Processing (Tile & Align GLTF models)", value="3d"),
                 ],
                 style=custom_style,
@@ -109,11 +109,16 @@ def main():
     # Other Utilities Group
     other_parser = subparsers.add_parser("other", help="Other utilities (Map & 3D asset processing)")
     other_subparsers = other_parser.add_subparsers(dest="subcommand", help="Utility subcommands")
-    other_subparsers.add_parser("map", help="Generate interactive floor plans (SVG processing)")
+    other_subparsers.add_parser("map", help="Convertir les plans sources en GeoJSON")
     other_subparsers.add_parser("3d", help="Process and align 3D tiles (GLTF assets)")
 
     # Backward compatibility aliases
     subparsers.add_parser("map", help="Alias for 'other map'")
+    wemap_parser = subparsers.add_parser("wemap", help="Extraire les plans Wemap en GeoJSON")
+    wemap_parser.add_argument("--map-id", type=int, default=29608)
+    wemap_parser.add_argument("--zoom", type=int)
+    wemap_parser.add_argument("--concurrency", type=int, default=5)
+    wemap_parser.add_argument("--offline", action="store_true")
     subparsers.add_parser("3d", help="Alias for 'other 3d'")
 
     args = parser.parse_args()
@@ -163,6 +168,9 @@ def main():
         else:
             other_parser.print_help()
 
+    elif args.command == "wemap":
+        from .scrapers.wemap import scrape_wemap
+        asyncio.run(scrape_wemap(config={"wemap_id": args.map_id, "wemap_zoom": args.zoom, "concurrency": args.concurrency, "wemap_offline": args.offline}))
     elif args.command == "map":
         from .map_gen import main as map_main
         map_main()

@@ -12,9 +12,10 @@ from tests.conftest import write_json
 async def test_load_apartments_no_files_is_a_noop(db_session, tmp_path, monkeypatch):
     monkeypatch.setattr(apartments_loader, "SCRAPS_AUTO_DIR", tmp_path)
     monkeypatch.setattr(apartments_loader, "EXPORT_DIR", str(tmp_path))
+    before = {row.id for row in (await db_session.execute(select(Location))).scalars()}
     await apartments_loader.load_apartments(db_session)
     result = await db_session.execute(select(Location))
-    assert result.scalars().all() == []
+    assert {row.id for row in result.scalars()} == before
 
 
 @pytest.mark.asyncio
@@ -36,6 +37,7 @@ async def test_load_apartments_room_details_create_location_with_attributes_and_
     assert apt.code == "1101"
     assert apt.attributes["type"] == "studio"
     assert apt.attributes["surface"] == "22 m²"
+    assert apt.attributes["plan"] == {"building":"U1","floor":"1"}
 
     building = await db_session.get(Location, apt.parent_id)
     assert building.kind == "BUILDING"

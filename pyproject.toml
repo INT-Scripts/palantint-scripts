@@ -24,6 +24,7 @@ dependencies = [
     "agendint",
     "backend",
     "playwright>=1.60.0",
+    "mapbox-vector-tile>=2.2.0",
 ]
 
 [project.scripts]
@@ -31,6 +32,7 @@ palantint = "palantint_scripts.cli:main"
 palantint-sync = "palantint_scripts.sync:main"
 palantint-admin = "palantint_scripts.admin:main"
 palantint-map = "palantint_scripts.map_gen:main"
+palantint-wemap = "palantint_scripts.scrapers.wemap:main"
 
 [dependency-groups]
 dev = [

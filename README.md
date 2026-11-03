@@ -47,6 +47,31 @@ All scripts import path locations from `palantint_scripts.config`:
 
 ## 🚀 The Synchronization Engine (`sync.py`)
 
+### Conversion des plans historiques
+
+Depuis `scripts/`, exécuter `uv run palantint other map` (ou la commande de conversion de plans dans `uv run palantint`). Le pipeline lit les SVG originaux et produit exclusivement les plans GeoJSON dans `PLANS_DIR`, puis leur manifeste. Les viewers 2D, 3D et de calibration consomment ces fichiers. Les coordonnées locales ne deviennent géographiques qu’avec des points de contrôle validés. Voir [le contrat détaillé](../docs/floor-plan-geojson.md).
+
+### Plans géographiques Wemap
+
+Le domaine `wemap` collecte les contours réels des salles et leurs métadonnées,
+les assemble en GeoJSON WGS84 et enrichit l’arbre `Location` sans effacer les
+occupants, l’agenda ou les calibrations existants. La collecte et l’ingestion
+restent deux phases distinctes.
+
+```bash
+# Sur l’hôte, depuis le dossier scripts/.
+uv run palantint
+
+# Commandes directes pour Wemap.
+uv run palantint-wemap
+uv run palantint-wemap --offline
+uv run python -m palantint_scripts.loaders.wemap
+```
+
+La nouvelle carte est disponible dans `/palantint/campus` ; `palantint verify`
+contrôle aussi les identifiants et les géométries extraits. Voir
+`docs/wemap-indoor-maps.md` dans le dépôt parent pour les formats et les routes.
+
 The `sync.py` script acts as the **Orchestrator**. It manages:
 - **TUI Interface**: Professional natural-language interaction via `questionary`.
 - **Navigation**: State-driven wizard with fluid "Left Arrow/Esc" back-navigation.

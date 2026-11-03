@@ -21,13 +21,20 @@ from palantint_scripts.loaders import vault as vault_loader
 from tests.conftest import write_json
 
 
-async def _make_person_with_trombint(db_session, external_id, first_name="John", last_name="Doe"):
+async def _make_person_with_trombint(
+    db_session, external_id, first_name="John", last_name="Doe"
+):
     source_id = await get_data_source_id(db_session, "trombint")
     person = Person(kind="STUDENT", first_name=first_name, last_name=last_name)
     db_session.add(person)
     await db_session.flush()
     from db.models import ExternalIdentity
-    db_session.add(ExternalIdentity(person_id=person.id, source_id=source_id, external_id=external_id))
+
+    db_session.add(
+        ExternalIdentity(
+            person_id=person.id, source_id=source_id, external_id=external_id
+        )
+    )
     await db_session.flush()
     return person
 
@@ -36,7 +43,9 @@ async def _make_person_with_trombint(db_session, external_id, first_name="John",
 async def test_export_writes_to_temp_dir_not_real_exports(db_session, tmp_path):
     """The most important property of this test file: it never touches the
     real project data/exports/ directory."""
-    await exporter.export_db_data(db_session, log=lambda x: None, export_dir=str(tmp_path))
+    await exporter.export_db_data(
+        db_session, log=lambda x: None, export_dir=str(tmp_path)
+    )
     assert (tmp_path / "socials.json").exists()
     assert (tmp_path / "apartments.json").exists()
     assert (tmp_path / "relationships.json").exists()
@@ -45,13 +54,23 @@ async def test_export_writes_to_temp_dir_not_real_exports(db_session, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_social_link_export_then_restore_roundtrip(db_session, tmp_path, monkeypatch):
+async def test_social_link_export_then_restore_roundtrip(
+    db_session, tmp_path, monkeypatch
+):
     person = await _make_person_with_trombint(db_session, "jdoe")
-    social = SocialLink(person_id=person.id, platform="instagram", username="jdoe_ig", url="https://instagram.com/jdoe_ig", confidence="LIKELY")
+    social = SocialLink(
+        person_id=person.id,
+        platform="instagram",
+        username="jdoe_ig",
+        url="https://instagram.com/jdoe_ig",
+        confidence="LIKELY",
+    )
     db_session.add(social)
     await db_session.commit()
 
-    await exporter.export_db_data(db_session, log=lambda x: None, export_dir=str(tmp_path))
+    await exporter.export_db_data(
+        db_session, log=lambda x: None, export_dir=str(tmp_path)
+    )
 
     exported = json.loads((tmp_path / "socials.json").read_text())
     assert len(exported) == 1
@@ -66,7 +85,9 @@ async def test_social_link_export_then_restore_roundtrip(db_session, tmp_path, m
     monkeypatch.setattr(vault_loader, "EXPORT_DIR", str(tmp_path))
     await vault_loader.restore_socials(db_session, log=lambda x: None)
 
-    result = await db_session.execute(select(SocialLink).where(SocialLink.person_id == person.id))
+    result = await db_session.execute(
+        select(SocialLink).where(SocialLink.person_id == person.id)
+    )
     restored = result.scalars().one()
     assert restored.platform == "instagram"
     assert restored.username == "jdoe_ig"
@@ -80,20 +101,35 @@ async def test_social_link_restore_is_idempotent(db_session, tmp_path, monkeypat
     await db_session.commit()
 
     fixed_id = str(uuid.uuid4())
-    write_json(tmp_path, "socials.json", [
-        {"id": fixed_id, "trombint_id": "jdoe", "platform": "x", "username": "jdoe_x", "url": "https://x.com/jdoe_x", "confidence": "CONFIRMED"},
-    ])
+    write_json(
+        tmp_path,
+        "socials.json",
+        [
+            {
+                "id": fixed_id,
+                "trombint_id": "jdoe",
+                "platform": "x",
+                "username": "jdoe_x",
+                "url": "https://x.com/jdoe_x",
+                "confidence": "CONFIRMED",
+            },
+        ],
+    )
     monkeypatch.setattr(vault_loader, "EXPORT_DIR", str(tmp_path))
 
     await vault_loader.restore_socials(db_session, log=lambda x: None)
     await vault_loader.restore_socials(db_session, log=lambda x: None)
 
-    result = await db_session.execute(select(SocialLink).where(SocialLink.person_id == person.id))
+    result = await db_session.execute(
+        select(SocialLink).where(SocialLink.person_id == person.id)
+    )
     assert len(result.scalars().all()) == 1
 
 
 @pytest.mark.asyncio
-async def test_relationship_export_then_restore_roundtrip_preserves_confidence_and_evidence(db_session, tmp_path, monkeypatch):
+async def test_relationship_export_then_restore_roundtrip_preserves_confidence_and_evidence(
+    db_session, tmp_path, monkeypatch
+):
     person_a = await _make_person_with_trombint(db_session, "aalpha", "Alice", "Alpha")
     person_b = await _make_person_with_trombint(db_session, "bbeta", "Bob", "Beta")
     rel_type = RelationshipType(name="Test Amis Roundtrip", color="#3b82f6")
@@ -106,13 +142,18 @@ async def test_relationship_export_then_restore_roundtrip_preserves_confidence_a
     media_id = media.id
 
     rel = PersonRelationship(
-        person_a_id=person_a.id, person_b_id=person_b.id, relationship_type_id=rel_type.id,
-        confidence="CONFIRMED", evidence_media_id=media_id,
+        person_a_id=person_a.id,
+        person_b_id=person_b.id,
+        relationship_type_id=rel_type.id,
+        confidence="CONFIRMED",
+        evidence_media_id=media_id,
     )
     db_session.add(rel)
     await db_session.commit()
 
-    await exporter.export_db_data(db_session, log=lambda x: None, export_dir=str(tmp_path))
+    await exporter.export_db_data(
+        db_session, log=lambda x: None, export_dir=str(tmp_path)
+    )
 
     await db_session.execute(PersonRelationship.__table__.delete())
     await db_session.commit()
@@ -135,10 +176,16 @@ async def test_housing_export_then_restore_roundtrip(db_session, tmp_path, monke
     db_session.add(apartment)
     await db_session.flush()
     housing_source_id = await get_data_source_id(db_session, "maisel")
-    db_session.add(PersonHousing(person_id=person.id, location_id=apartment.id, source_id=housing_source_id))
+    db_session.add(
+        PersonHousing(
+            person_id=person.id, location_id=apartment.id, source_id=housing_source_id
+        )
+    )
     await db_session.commit()
 
-    await exporter.export_db_data(db_session, log=lambda x: None, export_dir=str(tmp_path))
+    await exporter.export_db_data(
+        db_session, log=lambda x: None, export_dir=str(tmp_path)
+    )
     exported = json.loads((tmp_path / "apartments.json").read_text())
     assert exported == {"jdoe": "1101"}
 
@@ -149,7 +196,9 @@ async def test_housing_export_then_restore_roundtrip(db_session, tmp_path, monke
     monkeypatch.setattr(vault_loader, "EXPORT_DIR", str(tmp_path))
     await vault_loader.restore_apartment_mappings(db_session, log=lambda x: None)
 
-    result = await db_session.execute(select(PersonHousing).where(PersonHousing.person_id == person.id))
+    result = await db_session.execute(
+        select(PersonHousing).where(PersonHousing.person_id == person.id)
+    )
     restored = result.scalars().one()
     assert restored.ended_at is None
     restored_loc = await db_session.get(Location, restored.location_id)
@@ -157,7 +206,9 @@ async def test_housing_export_then_restore_roundtrip(db_session, tmp_path, monke
 
 
 @pytest.mark.asyncio
-async def test_map_metadata_export_then_restore_roundtrip(db_session, tmp_path, monkeypatch):
+async def test_map_metadata_export_then_restore_roundtrip(
+    db_session, tmp_path, monkeypatch
+):
     building = Location(kind="BUILDING", code="U3")
     db_session.add(building)
     await db_session.flush()
@@ -168,9 +219,18 @@ async def test_map_metadata_export_then_restore_roundtrip(db_session, tmp_path, 
     db_session.add(meta)
     await db_session.commit()
 
-    await exporter.export_db_data(db_session, log=lambda x: None, export_dir=str(tmp_path))
+    await exporter.export_db_data(
+        db_session, log=lambda x: None, export_dir=str(tmp_path)
+    )
     exported = json.loads((tmp_path / "maps.json").read_text())
-    assert exported == [{"id": str(meta.id), "building_id": "U3", "floor_id": "0", "pillars": [{"x": 1.0, "y": 2.0}]}]
+    assert exported == [
+        {
+            "id": str(meta.id),
+            "building_id": "U3",
+            "floor_id": "0",
+            "pillars": [{"x": 1.0, "y": 2.0}],
+        }
+    ]
 
     await db_session.execute(MapMetadata.__table__.delete())
     await db_session.commit()
@@ -189,7 +249,9 @@ async def test_map_metadata_export_then_restore_roundtrip(db_session, tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_restore_functions_are_noop_on_missing_files(db_session, tmp_path, monkeypatch):
+async def test_restore_functions_are_noop_on_missing_files(
+    db_session, tmp_path, monkeypatch
+):
     monkeypatch.setattr(vault_loader, "EXPORT_DIR", str(tmp_path))
     await vault_loader.restore_socials(db_session, log=lambda x: None)
     await vault_loader.restore_relationships(db_session, log=lambda x: None)
@@ -197,3 +259,57 @@ async def test_restore_functions_are_noop_on_missing_files(db_session, tmp_path,
     await vault_loader.restore_apartment_mappings(db_session, log=lambda x: None)
     await vault_loader.restore_maps(db_session, log=lambda x: None)
     # No exception raised is the assertion here.
+
+
+@pytest.mark.asyncio
+async def test_reference_metadata_and_manual_curations_survive_backup(
+    db_session, tmp_path, monkeypatch
+):
+    from palantint_scripts import map_references
+
+    manual = tmp_path / "manual"
+    monkeypatch.setattr(map_references, "SCRAPS_MANUAL_DIR", manual)
+    floor = (
+        (
+            await db_session.execute(
+                select(Location).where(
+                    Location.kind == "FLOOR", Location.code == "-0.5"
+                )
+            )
+        )
+        .scalars()
+        .one()
+    )
+    original = {**floor.attributes["legacy_plan"], "label": "Libellé manuel"}
+    floor.attributes = {
+        **floor.attributes,
+        "legacy_plan": original,
+        "notes": "Conservées",
+    }
+    source = manual / "metadata" / "wemap-curations.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(json.dumps([{"id": "test-custom-rule"}]))
+    controls = source.parent / "plan-georeferencing.json"
+    controls.write_text(
+        json.dumps({"U7_1": [{"plan": [0, 0], "geographic": [2.4, 48.6]}]})
+    )
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    await map_references.export_references(db_session, backup)
+    source.unlink()
+    controls.unlink()
+    floor.attributes = {
+        **floor.attributes,
+        "legacy_plan": {**original, "label": "Modifié"},
+    }
+    await map_references.restore_references(db_session, backup)
+    assert floor.attributes["legacy_plan"] == original
+    assert floor.attributes["legacy_plan_provenance"]["source_code"] == "vault_manual"
+    assert floor.attributes["notes"] == "Conservées"
+    assert json.loads(source.read_text()) == [{"id": "test-custom-rule"}]
+    assert "U7_1" in json.loads(controls.read_text())
+    controls.write_text(json.dumps({"newer": []}))
+    source.write_text(json.dumps([{"id": "newer-local-rule"}]))
+    await map_references.restore_references(db_session, backup)
+    assert json.loads(source.read_text()) == [{"id": "newer-local-rule"}]
+    assert json.loads(controls.read_text()) == {"newer": []}

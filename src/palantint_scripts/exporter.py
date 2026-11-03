@@ -1,3 +1,5 @@
+from palantint_scripts.config import EXPORTS_DIR
+from palantint_scripts.map_references import export_references
 import os
 import json
 from typing import Callable, Optional
@@ -43,9 +45,10 @@ async def export_db_data(db_session: AsyncSession, log: Callable = print, export
     real exports used by the running app.
     """
     if export_dir is None:
-        export_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../data/exports"))
+        export_dir = str(EXPORTS_DIR)
     os.makedirs(export_dir, exist_ok=True)
 
+    await export_references(db_session, export_dir)
     trombint_ids = await _trombint_id_map(db_session)
 
     # 1. MAP METADATA (Structural Calibration Vault)

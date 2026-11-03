@@ -17,7 +17,7 @@ from rich import box
 console = Console()
 logger = logging.getLogger("palantint.verifier")
 
-from palantint_scripts.config import SCRAPS_AUTO_DIR, PLANS_DIR
+from palantint_scripts.config import SCRAPS_AUTO_DIR, PLANS_DIR, WEMAP_DIR
 
 DATA_DIR = str(SCRAPS_AUTO_DIR)
 PLANS_DIR = str(PLANS_DIR)
@@ -78,8 +78,23 @@ def verify_floor_plans() -> Dict[str, Any]:
     if not os.path.exists(PLANS_DIR):
         return {"total": 0, "error": f"Directory not found: {PLANS_DIR}"}
 
-    files = [f for f in os.listdir(PLANS_DIR) if f.endswith(".png")]
-    return {"total": len(files), "valid": len(files)}
+    from pathlib import Path
+    stats = {"total":0,"valid":0,"errors":0,"rooms":0,"unresolved_rooms":0,"details":[]}
+    for path in sorted(Path(PLANS_DIR).glob("*.geojson")):
+        stats["total"]+=1
+        try:
+            data=json.loads(path.read_text(encoding="utf-8"))
+            assert data["type"]=="FeatureCollection" and data["metadata"]["plan_coordinate_space"]=="local_plan"
+            rooms=[f for f in data["features"] if f["properties"]["kind"]=="room"]
+            assert len(rooms)==data["metadata"]["room_count"]
+            assert len({f["properties"]["room_id"] for f in rooms})==len(rooms)
+            assert all(f["properties"].get("plan_geometry") for f in data["features"])
+            assert all((f["geometry"] is not None)==data["metadata"]["georeferenced"] for f in data["features"])
+            stats["rooms"]+=len(rooms);stats["unresolved_rooms"]+=len(data["metadata"]["unresolved_rooms"]);stats["valid"]+=1
+        except (ValueError,KeyError,TypeError,AssertionError) as error:
+            stats["errors"]+=1;stats["details"].append(f"{path.name} : {error}")
+    return stats
+
 
 def verify_students_schema() -> Dict[str, Any]:
     file_path = os.path.join(DATA_DIR, "students.json")
@@ -103,6 +118,33 @@ def verify_students_schema() -> Dict[str, Any]:
         return {"error": str(e)}
 
     return stats
+
+def verify_wemap_plans() -> Dict[str, Any]:
+    from shapely.geometry import shape
+
+    path = WEMAP_DIR / "campus.geojson"
+    if not path.exists():
+        return {"error": "Plans Wemap non extraits", "total": 0}
+    stats = {"total": 0, "valid": 0, "errors": 0, "details": []}
+    try:
+        collection = json.loads(path.read_text(encoding="utf-8"))
+        if collection.get("type") != "FeatureCollection":
+            return {"error": "Collection GeoJSON invalide", "total": 0}
+        seen = set()
+        stats["total"] = len(collection["features"])
+        for feature in collection["features"]:
+            geometry = shape(feature["geometry"])
+            west, south, east, north = geometry.bounds
+            if feature["id"] in seen or geometry.is_empty or not geometry.is_valid or not (-180 <= west <= east <= 180 and -90 <= south <= north <= 90):
+                stats["errors"] += 1
+                stats["details"].append(f"Géométrie ou identifiant invalide : {feature['id']}")
+            else:
+                stats["valid"] += 1
+            seen.add(feature["id"])
+    except Exception as error:
+        return {"error": str(error), "total": stats["total"]}
+    return stats
+
 
 def run_all_verifications():
     console.print("\n[bold blue]PalantINT — Scraper & Data Schema Audit[/bold blue]\n")
@@ -136,6 +178,13 @@ def run_all_verifications():
     else:
         status = "[green]OK[/green]" if stud_res["errors"] == 0 else "[yellow]SOFT FAIL / DISCREPANCY[/yellow]"
         table.add_row("Student Directory", str(stud_res["total"]), str(stud_res["valid"]), str(stud_res["errors"]), status)
+
+    geographical = verify_wemap_plans()
+    if "error" in geographical:
+        table.add_row("Plans géographiques Wemap", str(geographical.get("total", 0)), "0", "1", f"[yellow]{geographical['error']}[/yellow]")
+    else:
+        status = "[green]OK[/green]" if not geographical["errors"] else "[yellow]À vérifier[/yellow]"
+        table.add_row("Plans géographiques Wemap", str(geographical["total"]), str(geographical["valid"]), str(geographical["errors"]), status)
 
     console.print(table)
     console.print("\n[dim]Audit finished.[/dim]\n")

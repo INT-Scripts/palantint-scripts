@@ -1,3 +1,5 @@
+from palantint_scripts.config import EXPORTS_DIR
+from palantint_scripts.map_references import restore_references
 import asyncio
 import json
 import os
@@ -23,7 +25,7 @@ from db.models import (
 )
 from palantint_scripts.db_helpers import finish_ingestion_run, get_data_source_id, start_ingestion_run, utc_now
 
-EXPORT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../data/exports"))
+EXPORT_DIR = str(EXPORTS_DIR)
 
 SOURCE_CODE = "vault_manual"
 
@@ -313,6 +315,7 @@ async def anchor_identities(db_session: AsyncSession, log=print):
 
 async def restore_research(db_session: AsyncSession, log=print):
     """Pass 3: Restores all human OSINT intelligence & map calibrations from vault."""
+    await restore_references(db_session, EXPORT_DIR)
     await restore_maps(db_session, log)
     await restore_3d_config(db_session, log)
     socials_n = await restore_socials(db_session, log)
