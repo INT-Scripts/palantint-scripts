@@ -52,6 +52,9 @@ async def interactive_menu():
                 choices=[
                     questionary.Choice("🗺️  Conversion des plans vectoriels en GeoJSON", value="map"),
                     questionary.Choice("📦 3D Asset Processing (Tile & Align GLTF models)", value="3d"),
+                    questionary.Choice("🧭 Placement géographique des plans historiques", value="georef"),
+                    questionary.Choice("🛣️  Fond de carte OpenStreetMap", value="basemap"),
+                    questionary.Choice("🛰️  Photographies aériennes et relief 3D IGN", value="ign"),
                 ],
                 style=custom_style,
                 instruction="[Left/Esc: Back]"
@@ -66,6 +69,15 @@ async def interactive_menu():
             elif other_choice == "3d":
                 from .process_3d import process_3d_assets
                 process_3d_assets()
+            elif other_choice == "georef":
+                from .plan_registration import register_plans
+                register_plans()
+            elif other_choice == "basemap":
+                from .scrapers.basemap import scrape_basemap
+                await scrape_basemap()
+            elif other_choice == "ign":
+                from .scrapers.ign import scrape_ign
+                await scrape_ign()
         
         elif choice in ("exit", "BACK", None):
             console.print("\n[dim]Goodbye.[/dim]")
@@ -111,6 +123,15 @@ def main():
     other_subparsers = other_parser.add_subparsers(dest="subcommand", help="Utility subcommands")
     other_subparsers.add_parser("map", help="Convertir les plans sources en GeoJSON")
     other_subparsers.add_parser("3d", help="Process and align 3D tiles (GLTF assets)")
+    other_subparsers.add_parser("georef", help="Calculer le placement des plans historiques (puis l’importer via sync)")
+    basemap_parser = other_subparsers.add_parser("basemap", help="Télécharger le fond OpenStreetMap autour du campus")
+    basemap_parser.add_argument("--radius", type=int, default=1500)
+    basemap_parser.add_argument("--offline", action="store_true", help="Reconstruire depuis la réponse archivée")
+    ign_parser = other_subparsers.add_parser("ign", help="Télécharger l’imagerie et le LiDAR IGN, puis construire le relief 3D")
+    ign_parser.add_argument("--no-aerial", action="store_true")
+    ign_parser.add_argument("--no-relief", action="store_true")
+    ign_parser.add_argument("--relief-radius", type=int, default=700)
+    ign_parser.add_argument("--offline", action="store_true", help="Reconstruire depuis l’archive sans téléchargement")
 
     # Backward compatibility aliases
     subparsers.add_parser("map", help="Alias for 'other map'")
@@ -165,6 +186,15 @@ def main():
         elif getattr(args, "subcommand", None) == "3d":
             from .process_3d import process_3d_assets
             process_3d_assets()
+        elif args.subcommand == "georef":
+            from .plan_registration import register_plans
+            register_plans()
+        elif args.subcommand == "basemap":
+            from .scrapers.basemap import scrape_basemap
+            asyncio.run(scrape_basemap(config={"basemap_radius": args.radius, "basemap_offline": args.offline}))
+        elif args.subcommand == "ign":
+            from .scrapers.ign import scrape_ign
+            asyncio.run(scrape_ign(config={"ign_offline": args.offline, "ign_aerial": not args.no_aerial, "ign_relief": not args.no_relief, "ign_relief_radius": args.relief_radius}))
         else:
             other_parser.print_help()
 

@@ -14,6 +14,14 @@ PRIVATE_ASSETS_DIR = DATA_DIR / "private_assets"
 WEMAP_DIR = SCRAPS_AUTO_DIR / "wemap"
 WEMAP_IMPORT_DIR = SCRAPS_MANUAL_DIR / "wemap"
 GEO_PLANS_DIR = PRIVATE_ASSETS_DIR / "maps"
+# Campus map context: raw harvests are archived under SCRAPS_AUTO_DIR and can be
+# rebuilt offline; only the published products are served from GEO_PLANS_DIR.
+BASEMAP_ARCHIVE_DIR = SCRAPS_AUTO_DIR / "basemap"
+IGN_ARCHIVE_DIR = SCRAPS_AUTO_DIR / "ign"
+BASEMAP_PATH = GEO_PLANS_DIR / "basemap.geojson"
+AERIAL_DIR = GEO_PLANS_DIR / "aerial"
+RELIEF_DIR = GEO_PLANS_DIR / "relief"
+PLAN_REGISTRATION_PATH = SCRAPS_AUTO_DIR / "plans" / "plan-registration.json"
 
 INPUT_PNGS_DIR = SCRAPS_MANUAL_DIR / "input_pngs"
 
