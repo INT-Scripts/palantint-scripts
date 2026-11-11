@@ -4,7 +4,7 @@ import struct
 
 import numpy as np
 
-from palantint_scripts.plan_registration import apply, fit_labels, fit_similarity, match_shape
+from palantint_scripts.plan_registration import Frame, apply, fit_control_points, fit_labels, fit_similarity, match_shape
 from palantint_scripts.scrapers.basemap import to_features
 from palantint_scripts.loaders.plan_georeference import placement
 from palantint_scripts.scrapers.ign import relief_mesh, surface_grid, write_glb
@@ -55,6 +55,28 @@ def test_similarity_fit_is_exact_for_noise_free_points():
     truth = similarity(2.0, 10, 1.0, 2.0)
     points = [(0, 0), (1, 0), (0, 1)]
     assert np.allclose(fit_similarity(points, apply(truth, points)), truth)
+
+
+def test_manual_control_points_are_fitted_privately_and_checked():
+    frame = Frame([2.44, 48.62])
+    truth = similarity(0.055, -128, 30.0, 40.0)
+    plan_points = [(0, 0), (600, 0), (600, 700), (100, 650)]
+
+    def geographic(xy):
+        x, y = xy
+        return [frame.origin[0] + x / (frame.k * math.cos(math.radians(frame.origin[1]))), frame.origin[1] - y / frame.k]
+
+    points = [{"plan": list(p), "geographic": geographic(m)} for p, m in zip(plan_points, apply(truth, plan_points))]
+    fit, reason = fit_control_points(points, frame)
+    assert reason is None
+    assert (fit["method"], fit["anchors"]) == ("control_points", 4)
+    assert fit["rms_m"] < 1e-3
+    assert np.allclose(fit["transform"], truth, atol=1e-6)
+    assert fit_control_points(points[:2], frame) == (None, "Moins de trois points de contrôle manuels.")
+    # A point 20 m off cannot be absorbed by a similarity: the plan stays unplaced.
+    points[3]["geographic"] = geographic(apply(truth, [plan_points[3]])[0] + 20)
+    fit, reason = fit_control_points(points, frame)
+    assert fit is None and reason.startswith("Points de contrôle manuels incohérents")
 
 
 def test_osm_elements_become_typed_features():

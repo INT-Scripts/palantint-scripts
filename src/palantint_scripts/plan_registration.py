@@ -13,8 +13,10 @@ from plan units to metres east/south of a fixed origin, using in order:
 
 A shape match must be unambiguous (no other orientation scoring nearly as well)
 and close, otherwise the plan stays unplaced and the map keeps the Wemap rooms.
-Manual control points (``plan-georeferencing.json``, applied by ``map_gen``)
-always take precedence: those plans already carry WGS84 geometry.
+Manual control points (``plan-georeferencing.json``) always take precedence:
+they are fitted with the same similarity and must stay within
+``CONTROL_MAX_RMS_M``. Like every placement, they never reach the public plan
+files.
 
 The result is written to ``PLAN_REGISTRATION_PATH`` (harvest archive, private)
 and ingested onto the plan FLOOR locations by
@@ -33,7 +35,7 @@ from datetime import datetime, timezone
 import cv2
 import numpy as np
 
-from palantint_scripts.config import BASEMAP_PATH, GEO_PLANS_DIR, PLAN_REGISTRATION_PATH, PLANS_DIR
+from palantint_scripts.config import BASEMAP_PATH, GEO_PLANS_DIR, PLAN_REGISTRATION_PATH, PLANS_DIR, SCRAPS_MANUAL_DIR
 from palantint_scripts.scrapers.wemap import write_json
 
 RADIUS = 6378137
@@ -42,6 +44,8 @@ LABEL_MAX_RMS_M = 1.5
 SHAPE_MAX_MEAN_M = 0.6
 SHAPE_MIN_INLIERS = 0.6
 SHAPE_AMBIGUITY = 0.8
+CONTROL_MAX_RMS_M = 3.0
+CONTROL_POINTS_PATH = SCRAPS_MANUAL_DIR / "metadata" / "plan-georeferencing.json"
 
 
 def room_code(value):
@@ -222,6 +226,22 @@ def match_shape(source_rings, target_rings, scales):
     return {"transform": best[2], "mean_m": best[0], "inliers": best[1], "ambiguity": ambiguity}
 
 
+def fit_control_points(points, frame):
+    """Similarity from manual {plan, geographic} pairs; (fit, None) or (None, reason)."""
+    if len(points) < 3:
+        return None, "Moins de trois points de contrôle manuels."
+    source = [point["plan"] for point in points]
+    target = [frame.project(point["geographic"]) for point in points]
+    transform = fit_similarity(source, target)
+    if transform is None:
+        return None, "Points de contrôle manuels confondus."
+    residuals = np.hypot(*(apply(transform, source) - np.asarray(target)).T)
+    rms = float(np.sqrt((residuals**2).mean()))
+    if rms > CONTROL_MAX_RMS_M:
+        return None, f"Points de contrôle manuels incohérents (RMS {rms:.2f} m)."
+    return {"method": "control_points", "transform": transform, "anchors": len(points), "rms_m": rms}, None
+
+
 def footprint_rings(rings, scale):
     """Outer contour of the plan's rooms, closing gaps of about 1.5 m between rooms."""
     points = np.concatenate([np.asarray(ring, float) for ring in rings])
@@ -306,14 +326,24 @@ def register_plans(log=print):
             if props.get("kind") == "building" and props.get("name"):
                 osm_outlines.setdefault(props["name"].upper(), [[frame.project(p) for p in poly[0]] for poly in polygons_of(feature["geometry"])])
 
+    controls = json.loads(CONTROL_POINTS_PATH.read_text(encoding="utf-8")) if CONTROL_POINTS_PATH.is_file() else {}
     results, unplaced, plans = {}, {}, load_plans()
     for name, plan in plans:
         meta = plan["metadata"]
         code = meta["building"].upper()
+        candidates = set(by_code.get(code, []))
+        if name in controls:
+            fit, reason = fit_control_points(controls[name], frame)
+            if reason:
+                unplaced[name] = reason
+                fit = {"rejected": True}
+            elif len(candidates) == 1:
+                fit["wemap_building_id"] = next(iter(candidates))
+            results[name] = {**fit, "building": meta["building"], "floor": meta["floor"]}
+            continue
         if meta.get("georeferenced"):
             results[name] = {"building": meta["building"], "floor": meta["floor"], "method": "control_points"}
             continue
-        candidates = set(by_code.get(code, []))
         pairs = []
         for props, _ in plan_rooms(plan):
             point = props.get("label_coordinates")
@@ -335,7 +365,7 @@ def register_plans(log=print):
 
     for name, plan in plans:
         result = results[name]
-        if "transform" in result or result.get("method") == "control_points":
+        if "transform" in result or result.get("method") == "control_points" or result.get("rejected"):
             continue
         meta = plan["metadata"]
         code = meta["building"].upper()
@@ -390,6 +420,12 @@ def register_plans(log=print):
             entry["wemap_building_name"] = wemap_names.get(entry["wemap_building_id"])
         placed[name] = entry
 
+    # A manually placed floor without any Wemap level keeps its drawing floor.
+    for entry in placed.values():
+        if entry["method"] == "control_points" and "transform" in entry and entry.get("level") is None:
+            entry["level"] = float(entry["floor"])
+            entry["level_source"] = "plan_floor"
+
     # Floors stack consistently within a building. A floor without its own Wemap
     # level, or whose shape matched a lower storey with the same layout, takes
     # the level offset shared by the other floors of its building.
@@ -416,7 +452,7 @@ def register_plans(log=print):
     }
     write_json(PLAN_REGISTRATION_PATH, output)
     for name, entry in sorted(placed.items()):
-        quality = f"{entry['anchors']} repères, RMS {entry['rms_m']:.2f} m" if entry["method"] == "room_labels" else f"écart moyen {entry.get('mean_distance_m', 0):.2f} m"
+        quality = f"{entry['anchors']} repères, RMS {entry['rms_m']:.2f} m" if "rms_m" in entry else f"écart moyen {entry.get('mean_distance_m', 0):.2f} m"
         log(f"  {name:10} {entry['method']:14} niveau {entry.get('level')}  {quality}")
     for name, reason in sorted(unplaced.items()):
         log(f"  {name:10} non placé : {reason}")

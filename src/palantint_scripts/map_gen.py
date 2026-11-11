@@ -391,15 +391,11 @@ def process_foyer_map_csv(root_dir=None):
 def main():
     files = sorted((SCRAPS_MANUAL_DIR / "input_svgs").glob("*.svg"))
     PLANS_DIR.mkdir(parents=True, exist_ok=True)
-    references = SCRAPS_MANUAL_DIR / "metadata" / "plan-georeferencing.json"
-    controls = (
-        json.loads(references.read_text(encoding="utf-8"))
-        if references.is_file()
-        else {}
-    )
     report = []
     for path in files:
-        collection = convert_svg(path, control_points=controls.get(path.stem))
+        # Public plan files stay in local coordinates: manual control points are
+        # applied privately by plan_registration.
+        collection = convert_svg(path)
         target = PLANS_DIR / f"{path.stem}.geojson"
         temporary = target.with_suffix(".geojson.tmp")
         temporary.write_text(
