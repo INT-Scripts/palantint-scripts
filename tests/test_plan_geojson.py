@@ -83,3 +83,70 @@ def test_nested_svg_transforms_and_nonzero_viewbox_are_retained(tmp_path):
     ]
     assert data["features"][1]["properties"]["label_coordinates"] == [12, 23]
     assert data["metadata"]["view_box"] == [10, 20, 100, 100]
+
+
+CORRIDOR_PLAN = (
+    '<path d="M 2 2 H 98 V 98 H 2 Z M 2 40 H 98 M 2 60 H 98 M 50 2 V 40"/>'
+    '<text id="1001" x="20" y="25">1001</text><text id="1002" x="70" y="25">1002</text>'
+)
+
+
+def kinds(data, *names):
+    return [f for f in data["features"] if f["properties"]["kind"] in names]
+
+
+def test_unlabelled_enclosures_become_spaces_and_the_floor_covers_the_whole_storey(
+    tmp_path,
+):
+    data = convert_svg(source(tmp_path, CORRIDOR_PLAN))
+    assert len(kinds(data, "room")) == 2
+    spaces = kinds(data, "space")
+    # The corridor (40–60) and the bottom area (60–98), never the outside.
+    assert len(spaces) == 2
+    assert all(f["properties"]["extraction"] == "unlabelled_enclosure" for f in spaces)
+    assert all(f["properties"]["plan_geometry"]["type"] == "Polygon" for f in spaces)
+    (floor,) = kinds(data, "floor")
+    xs = [p[0] for p in floor["properties"]["plan_geometry"]["coordinates"][0]]
+    assert min(xs) < 3 and max(xs) > 97
+    assert data["metadata"]["space_count"] == 2
+    assert convert_svg(source(tmp_path, CORRIDOR_PLAN)) == data
+
+
+def test_defined_spaces_and_partitions_classify_and_split_regions(tmp_path):
+    path = source(tmp_path, CORRIDOR_PLAN)
+    data = convert_svg(
+        path,
+        spaces={
+            "partitions": [[[50, 60], [50, 98]]],
+            "spaces": [
+                {"id": "hall", "kind": "corridor", "name": "Couloir", "point": [30, 50]},
+                {"id": "stairs", "kind": "stairs", "point": [25, 80]},
+                {"id": "patio", "kind": "void", "point": [75, 80]},
+            ],
+        },
+    )
+    corridor = next(f for f in data["features"] if f["properties"]["kind"] == "corridor")
+    assert corridor["id"] == "plan:U1:0:space:hall"
+    assert corridor["properties"]["name"] == "Couloir"
+    assert corridor["properties"]["extraction"] == "defined"
+    assert len(kinds(data, "stairs")) == 1
+    # A void is neither a space nor part of the floor, and partitions are not walls.
+    assert not kinds(data, "space", "void")
+    assert all(f["properties"]["plan_geometry"]["coordinates"] != [[50, 60], [50, 98]] for f in kinds(data, "wall"))
+    (floor,) = kinds(data, "floor")
+    assert len(floor["properties"]["plan_geometry"]["coordinates"]) == 1
+    assert max(p[1] for p in floor["properties"]["plan_geometry"]["coordinates"][0] if p[0] > 60) < 70
+
+
+def test_spaces_on_rooms_or_outside_stay_points_to_check(tmp_path):
+    data = convert_svg(
+        source(tmp_path, CORRIDOR_PLAN),
+        spaces={"spaces": [
+            {"id": "a", "kind": "corridor", "point": [20, 20]},
+            {"id": "b", "kind": "space", "point": [200, 200]},
+        ]},
+    )
+    assert set(data["metadata"]["unresolved_spaces"]) == {"a", "b"}
+    assert data["metadata"]["unresolved_rooms"] == ["1001"]
+    with pytest.raises(ValueError, match="Type d’espace"):
+        convert_svg(source(tmp_path, CORRIDOR_PLAN), spaces={"spaces": [{"id": "x", "kind": "hall", "point": [1, 1]}]})

@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from db.models import Location
-from palantint_scripts.config import SCRAPS_MANUAL_DIR
+from palantint_scripts.config import PLAN_SPACES_PATH, SCRAPS_MANUAL_DIR
 from palantint_scripts.db_helpers import get_data_source_id
 
 
@@ -34,9 +34,19 @@ async def export_references(db, export_dir):
     georeferencing = (
         json.loads(controls.read_text(encoding="utf-8")) if controls.is_file() else {}
     )
+    plan_spaces = (
+        json.loads(PLAN_SPACES_PATH.read_text(encoding="utf-8"))
+        if PLAN_SPACES_PATH.is_file()
+        else {}
+    )
     Path(export_dir, "map_references.json").write_text(
         json.dumps(
-            {"plans": plans, "curations": curations, "georeferencing": georeferencing},
+            {
+                "plans": plans,
+                "curations": curations,
+                "georeferencing": georeferencing,
+                "plan_spaces": plan_spaces,
+            },
             ensure_ascii=False,
             indent=2,
         ),
@@ -118,6 +128,12 @@ async def restore_references(db, export_dir):
         controls.parent.mkdir(parents=True, exist_ok=True)
         controls.write_text(
             json.dumps(data["georeferencing"], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    if data.get("plan_spaces") and not PLAN_SPACES_PATH.exists():
+        PLAN_SPACES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PLAN_SPACES_PATH.write_text(
+            json.dumps(data["plan_spaces"], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     await db.flush()

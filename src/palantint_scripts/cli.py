@@ -51,6 +51,7 @@ async def interactive_menu():
                 "Select Utility Tool:",
                 choices=[
                     questionary.Choice("🗺️  Conversion des plans vectoriels en GeoJSON", value="map"),
+                    questionary.Choice("🚪 Éditeur des couloirs et espaces des plans", value="spaces"),
                     questionary.Choice("📦 3D Asset Processing (Tile & Align GLTF models)", value="3d"),
                     questionary.Choice("🧭 Placement géographique des plans historiques", value="georef"),
                     questionary.Choice("🛣️  Fond de carte OpenStreetMap", value="basemap"),
@@ -66,6 +67,9 @@ async def interactive_menu():
             if other_choice == "map":
                 from .map_gen import main as map_main
                 map_main()
+            elif other_choice == "spaces":
+                from .plan_spaces_editor import main as spaces_main
+                spaces_main()
             elif other_choice == "3d":
                 from .process_3d import process_3d_assets
                 process_3d_assets()
@@ -122,6 +126,9 @@ def main():
     other_parser = subparsers.add_parser("other", help="Other utilities (Map & 3D asset processing)")
     other_subparsers = other_parser.add_subparsers(dest="subcommand", help="Utility subcommands")
     other_subparsers.add_parser("map", help="Convertir les plans sources en GeoJSON")
+    spaces_parser = other_subparsers.add_parser("spaces", help="Éditer les couloirs, escaliers et autres espaces sans numéro des plans")
+    spaces_parser.add_argument("--port", type=int, default=8765)
+    spaces_parser.add_argument("--no-browser", action="store_true")
     other_subparsers.add_parser("3d", help="Process and align 3D tiles (GLTF assets)")
     other_subparsers.add_parser("georef", help="Calculer le placement des plans historiques (puis l’importer via sync)")
     basemap_parser = other_subparsers.add_parser("basemap", help="Télécharger le fond OpenStreetMap autour du campus")
@@ -183,6 +190,9 @@ def main():
         if getattr(args, "subcommand", None) == "map":
             from .map_gen import main as map_main
             map_main()
+        elif args.subcommand == "spaces":
+            from .plan_spaces_editor import main as spaces_main
+            spaces_main(port=args.port, open_browser=not args.no_browser)
         elif getattr(args, "subcommand", None) == "3d":
             from .process_3d import process_3d_assets
             process_3d_assets()

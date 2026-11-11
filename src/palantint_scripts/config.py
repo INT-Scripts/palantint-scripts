@@ -22,6 +22,9 @@ BASEMAP_PATH = GEO_PLANS_DIR / "basemap.geojson"
 AERIAL_DIR = GEO_PLANS_DIR / "aerial"
 RELIEF_DIR = GEO_PLANS_DIR / "relief"
 PLAN_REGISTRATION_PATH = SCRAPS_AUTO_DIR / "plans" / "plan-registration.json"
+# Manual corridors, stairs and other unlabelled spaces of the plans, with the
+# partitions closing open areas (edited with `palantint other spaces`).
+PLAN_SPACES_PATH = SCRAPS_MANUAL_DIR / "metadata" / "plan-spaces.json"
 
 INPUT_PNGS_DIR = SCRAPS_MANUAL_DIR / "input_pngs"
 

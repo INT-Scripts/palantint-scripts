@@ -18,7 +18,16 @@ import cv2
 import numpy as np
 from svgpathtools import parse_path
 
-from palantint_scripts.config import ASSETS_DIR, PLANS_DIR, SCRAPS_MANUAL_DIR
+from palantint_scripts.config import (
+    ASSETS_DIR,
+    PLAN_SPACES_PATH,
+    PLANS_DIR,
+    SCRAPS_MANUAL_DIR,
+)
+
+SPACE_KINDS = ("corridor", "stairs", "elevator", "space", "void")
+# Enclosed regions smaller than this (source units²) are gaps between strokes.
+MIN_SPACE_AREA = 100
 
 
 def matrix(value):
@@ -51,7 +60,49 @@ def matrix(value):
     return result
 
 
-def convert_svg(path, raster_scale=2, control_points=None):
+def read_plan_spaces():
+    if not PLAN_SPACES_PATH.is_file():
+        return {}
+    return json.loads(PLAN_SPACES_PATH.read_text(encoding="utf-8"))
+
+
+def validate_plan_spaces(definition):
+    """Check one plan's definition: {"partitions": [[p, q], …], "spaces": [{id, kind, point, name?}, …]}."""
+
+    def is_point(value):
+        return (
+            isinstance(value, list)
+            and len(value) == 2
+            and all(
+                isinstance(v, (int, float)) and math.isfinite(float(v)) for v in value
+            )
+        )
+
+    for line in definition.get("partitions", []):
+        if not isinstance(line, list) or len(line) < 2 or not all(map(is_point, line)):
+            raise ValueError(f"Cloison invalide : {line}")
+    identities = set()
+    for space in definition.get("spaces", []):
+        identity = str(space.get("id", "")).strip()
+        if not identity or identity in identities:
+            raise ValueError(f"Identifiant d’espace manquant ou dupliqué : {identity}")
+        identities.add(identity)
+        if space.get("kind") not in SPACE_KINDS:
+            raise ValueError(f"Type d’espace inconnu : {identity} ({space.get('kind')})")
+        if not is_point(space.get("point")):
+            raise ValueError(f"Point d’espace invalide : {identity}")
+    return definition
+
+
+def convert_svg(path, raster_scale=2, control_points=None, spaces=None):
+    """``spaces`` is the plan's entry of ``plan-spaces.json``.
+
+    Partitions are drawn into the extraction raster only (never emitted as
+    walls). Each defined space takes the enclosed region under its point; the
+    remaining enclosed regions become unnamed ``space`` features, and the union
+    of all of them (minus voids) gives the ``floor`` slab.
+    """
+    spaces = validate_plan_spaces(spaces or {})
     path = Path(path)
     root = ET.fromstring(path.read_text(encoding="utf-8"))
     view = [float(n) for n in root.get("viewBox", "").replace(",", " ").split()]
@@ -164,7 +215,7 @@ def convert_svg(path, raster_scale=2, control_points=None):
             round((p[1] - origin_y) * raster_scale) + 2,
         )
 
-    for coords in walls:
+    for coords in [*walls, *spaces.get("partitions", [])]:
         cv2.polylines(
             raster,
             [np.array([to_pixel(p) for p in coords], dtype=np.int32)],
@@ -172,39 +223,50 @@ def convert_svg(path, raster_scale=2, control_points=None):
             255,
             max(1, round(raster_scale)),
         )
-    _, regions, stats, _ = cv2.connectedComponentsWithStats(
+    count, regions, stats, _ = cv2.connectedComponentsWithStats(
         255 - raster, connectivity=4
     )
-    extracted = []
-    for identity, label, text in labels:
-        x, y = to_pixel([label[0], label[1] - 4])
-        region = 0
-        for dx, dy in ((0, 0), (0, -3), (0, 3), (3, 0), (-3, 0)):
+
+    def enclosed(candidate):
+        left, top, w, h, area = stats[candidate]
+        return (
+            left > 0
+            and top > 0
+            and left + w < raster.shape[1]
+            and top + h < raster.shape[0]
+            and 20 < area
+        )
+
+    def region_at(point, offsets=((0, 0),)):
+        x, y = to_pixel(point)
+        for dx, dy in offsets:
             px, py = x + dx, y + dy
             if (
                 0 <= px < raster.shape[1]
                 and 0 <= py < raster.shape[0]
                 and regions[py, px]
+                and enclosed(int(regions[py, px]))
             ):
-                candidate = int(regions[py, px])
-                left, top, w, h, area = stats[candidate]
-                if (
-                    left > 0
-                    and top > 0
-                    and left + w < raster.shape[1]
-                    and top + h < raster.shape[0]
-                    and 20 < area
-                ):
-                    region = candidate
-                    break
+                return int(regions[py, px])
+        return 0
+
+    extracted = []
+    for identity, label, text in labels:
+        region = region_at(
+            [label[0], label[1] - 4], ((0, 0), (0, -3), (0, 3), (3, 0), (-3, 0))
+        )
         extracted.append((identity, label, text, region))
-    counts = Counter(item[3] for item in extracted if item[3])
+    defined = [(space, region_at(space["point"])) for space in spaces.get("spaces", [])]
+    counts = Counter(
+        [item[3] for item in extracted if item[3]]
+        + [region for _, region in defined if region]
+    )
     features = []
 
-    def feature(identity, kind, geometry, **properties):
+    def feature(identity, kind, geometry, segment=None, **properties):
         return {
             "type": "Feature",
-            "id": f"plan:{building}:{floor}:{kind}:{identity}",
+            "id": f"plan:{building}:{floor}:{segment or kind}:{identity}",
             "geometry": None,
             "properties": {
                 "kind": kind,
@@ -219,55 +281,127 @@ def convert_svg(path, raster_scale=2, control_points=None):
         features.append(
             feature(str(i), "wall", {"type": "LineString", "coordinates": coords})
         )
+
+    def ring(contour):
+        points = cv2.approxPolyDP(contour, 0.4 * raster_scale, True).reshape(-1, 2)
+        output = [
+            [
+                round((float(x) - 2) / raster_scale + origin_x, 3),
+                round((float(y) - 2) / raster_scale + origin_y, 3),
+            ]
+            for x, y in points
+        ]
+        if len(output) >= 3:
+            output.append(output[0])
+            return output
+        return None
+
+    def outline(mask):
+        contours, hierarchy = cv2.findContours(
+            np.uint8(mask) * 255, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
+        )
+        polygons = []
+        if hierarchy is not None:
+            for i, contour in enumerate(contours):
+                if hierarchy[0][i][3] != -1:
+                    continue
+                outer = ring(contour)
+                if not outer:
+                    continue
+                rings = [outer]
+                child = hierarchy[0][i][2]
+                while child != -1:
+                    hole = ring(contours[child])
+                    if hole:
+                        rings.append(hole)
+                    child = hierarchy[0][child][0]
+                polygons.append(rings)
+        if not polygons:
+            return None
+        return (
+            {"type": "Polygon", "coordinates": polygons[0]}
+            if len(polygons) == 1
+            else {"type": "MultiPolygon", "coordinates": polygons}
+        )
+
+    def interior_point(region):
+        # Deepest pixel of the region: inside even for L-shaped corridors.
+        left, top, w, h, _ = stats[region]
+        crop = np.uint8(regions[top : top + h, left : left + w] == region)
+        depth = cv2.distanceTransform(np.pad(crop, 1), cv2.DIST_L2, 3)
+        y, x = np.unravel_index(int(np.argmax(depth)), depth.shape)
+        return [
+            round((left + x - 1 - 2) / raster_scale + origin_x, 1),
+            round((top + y - 1 - 2) / raster_scale + origin_y, 1),
+        ]
+
+    used = set(counts)
+    voids = [region for space, region in defined if region and space["kind"] == "void"]
+    floor_regions = [
+        region
+        for region in range(1, count)
+        if enclosed(region)
+        and region not in voids
+        and stats[region][4] >= MIN_SPACE_AREA * raster_scale**2
+    ]
+    if floor_regions:
+        # Grow the enclosed areas over the wall strokes between and around them.
+        slab = cv2.dilate(
+            cv2.morphologyEx(
+                np.uint8(np.isin(regions, floor_regions)),
+                cv2.MORPH_CLOSE,
+                np.ones((2 * round(raster_scale) + 3,) * 2, np.uint8),
+            ),
+            np.ones((2 * round(raster_scale) + 1,) * 2, np.uint8),
+        )
+        slab[np.isin(regions, voids)] = 0
+        geometry = outline(slab)
+        if geometry:
+            features.append(feature("floor", "floor", geometry))
+    unresolved_spaces = []
+    for space, region in defined:
+        if space["kind"] == "void":
+            continue
+        geometry = outline(regions == region) if region and counts[region] == 1 else None
+        if not geometry:
+            unresolved_spaces.append(space["id"])
+            geometry = {"type": "Point", "coordinates": space["point"]}
+        features.append(
+            feature(
+                space["id"],
+                space["kind"],
+                geometry,
+                segment="space",
+                space_id=space["id"],
+                name=space.get("name") or None,
+                label_coordinates=space["point"],
+                extraction="defined" if region and counts[region] == 1 else "unresolved",
+            )
+        )
+    for region in floor_regions:
+        if region in used:
+            continue
+        point = interior_point(region)
+        identity = f"auto-{round(point[0])}-{round(point[1])}"
+        features.append(
+            feature(
+                identity,
+                "space",
+                outline(regions == region),
+                space_id=identity,
+                name=None,
+                label_coordinates=point,
+                extraction="unlabelled_enclosure",
+            )
+        )
     missing = []
     for identity, label, text, region in extracted:
         geometry = {"type": "Point", "coordinates": label}
         status = "unresolved"
         if region and counts[region] == 1:
-            contours, hierarchy = cv2.findContours(
-                np.uint8(regions == region) * 255,
-                cv2.RETR_CCOMP,
-                cv2.CHAIN_APPROX_SIMPLE,
-            )
-            polygons = []
-
-            def ring(contour):
-                points = cv2.approxPolyDP(contour, 0.4 * raster_scale, True).reshape(
-                    -1, 2
-                )
-                output = [
-                    [
-                        round((float(x) - 2) / raster_scale + origin_x, 3),
-                        round((float(y) - 2) / raster_scale + origin_y, 3),
-                    ]
-                    for x, y in points
-                ]
-                if len(output) >= 3:
-                    output.append(output[0])
-                    return output
-                return None
-
-            if hierarchy is not None:
-                for i, contour in enumerate(contours):
-                    if hierarchy[0][i][3] != -1:
-                        continue
-                    outer = ring(contour)
-                    if not outer:
-                        continue
-                    rings = [outer]
-                    child = hierarchy[0][i][2]
-                    while child != -1:
-                        hole = ring(contours[child])
-                        if hole:
-                            rings.append(hole)
-                        child = hierarchy[0][child][0]
-                    polygons.append(rings)
-            if polygons:
-                geometry = (
-                    {"type": "Polygon", "coordinates": polygons[0]}
-                    if len(polygons) == 1
-                    else {"type": "MultiPolygon", "coordinates": polygons}
-                )
+            polygon = outline(regions == region)
+            if polygon:
+                geometry = polygon
                 status = "wall_enclosure"
         if status == "unresolved":
             missing.append(identity)
@@ -358,6 +492,12 @@ def convert_svg(path, raster_scale=2, control_points=None):
             "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "room_count": len(labels),
             "unresolved_rooms": missing,
+            "space_count": sum(
+                1
+                for item in features
+                if item["properties"]["kind"] in SPACE_KINDS
+            ),
+            "unresolved_spaces": unresolved_spaces,
             "extraction_tolerance": 1 / raster_scale,
         },
         "features": features,
@@ -388,28 +528,41 @@ def process_foyer_map_csv(root_dir=None):
     (destination / "foyer_map.csv").write_bytes(source.read_bytes())
 
 
-def main():
-    files = sorted((SCRAPS_MANUAL_DIR / "input_svgs").glob("*.svg"))
-    PLANS_DIR.mkdir(parents=True, exist_ok=True)
-    report = []
-    for path in files:
-        # Public plan files stay in local coordinates: manual control points are
-        # applied privately by plan_registration.
-        collection = convert_svg(path)
-        target = PLANS_DIR / f"{path.stem}.geojson"
-        temporary = target.with_suffix(".geojson.tmp")
-        temporary.write_text(
-            json.dumps(collection, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        temporary.replace(target)
-        report.append(collection["metadata"])
-        print(
-            f"{path.stem} : {collection['metadata']['room_count']} salles, {len(collection['metadata']['unresolved_rooms'])} contours à vérifier"
-        )
+def write_plan(path, spaces=None):
+    # Public plan files stay in local coordinates: manual control points are
+    # applied privately by plan_registration.
+    collection = convert_svg(path, spaces=spaces)
+    target = PLANS_DIR / f"{Path(path).stem}.geojson"
+    temporary = target.with_suffix(".geojson.tmp")
+    temporary.write_text(
+        json.dumps(collection, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    temporary.replace(target)
+    return collection
+
+
+def write_manifest():
+    report = [
+        json.loads(path.read_text(encoding="utf-8"))["metadata"]
+        for path in sorted(PLANS_DIR.glob("*.geojson"))
+    ]
     (PLANS_DIR / "manifest.json").write_text(
         json.dumps({"plans": report}, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    return report
+
+
+def main():
+    files = sorted((SCRAPS_MANUAL_DIR / "input_svgs").glob("*.svg"))
+    PLANS_DIR.mkdir(parents=True, exist_ok=True)
+    definitions = read_plan_spaces()
+    for path in files:
+        metadata = write_plan(path, definitions.get(path.stem))["metadata"]
+        print(
+            f"{path.stem} : {metadata['room_count']} salles, {metadata['space_count']} espaces, {len(metadata['unresolved_rooms']) + len(metadata['unresolved_spaces'])} contours à vérifier"
+        )
+    report = write_manifest()
     process_foyer_map_csv()
     print(
         f"Conversion terminée : {len(report)} plans GeoJSON. Les sources SVG sont conservées."
