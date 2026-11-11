@@ -66,7 +66,9 @@ def _wait_pg_ready(container_name: str, timeout: float = 60.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         result = subprocess.run(
-            ["docker", "exec", container_name, "pg_isready", "-U", PG_USER, "-d", PG_DB],
+            # Over TCP: the image's temporary init server only listens on the Unix
+            # socket and restarts afterwards, which reset the first connection.
+            ["docker", "exec", container_name, "pg_isready", "-h", "127.0.0.1", "-U", PG_USER, "-d", PG_DB],
             capture_output=True, text=True,
         )
         if result.returncode == 0:
