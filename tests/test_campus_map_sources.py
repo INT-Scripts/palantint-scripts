@@ -1,13 +1,13 @@
 import json
 import math
-import struct
 
 import numpy as np
+import pytest
 
 from palantint_scripts.plan_registration import Frame, apply, fit_control_points, fit_labels, fit_similarity, match_shape
 from palantint_scripts.scrapers.basemap import to_features
 from palantint_scripts.loaders.plan_georeference import placement
-from palantint_scripts.scrapers.ign import relief_mesh, surface_grid, write_glb
+from palantint_scripts.scrapers.ign import read_relief_tile, surface_grid, write_relief_tile
 
 
 def similarity(scale, degrees, tx, ty):
@@ -97,32 +97,36 @@ def test_osm_elements_become_typed_features():
     assert features["way/3"]["properties"]["class"] == "path"
 
 
-def test_relief_tile_is_a_valid_unlit_glb_facing_up(tmp_path):
+def test_relief_tile_stores_heights_within_a_millimetre_and_the_texture(tmp_path):
     grid = np.zeros((5, 5), np.float32)
-    grid[2, 2] = 10
-    positions, uvs, indices = relief_mesh(grid, 100.0)
-    vertices = positions.reshape(-1, 3)
-    assert vertices[12].tolist() == [50.0, 10.0, 50.0]
-    assert uvs.reshape(-1, 2)[24].tolist() == [1.0, 1.0]
-    a, b, c = (vertices[i] for i in indices[:3])
-    assert np.cross(b - a, c - a)[1] > 0
-    path = tmp_path / "tile.glb"
-    write_glb(path, positions, uvs, indices, b"\xff\xd8jpeg")
+    grid[2, 2] = 10.0
+    grid[0, 4] = -3.25
+    path = tmp_path / "tile.bin"
+    write_relief_tile(path, grid, 152.87, b"\xff\xd8jpeg")
     data = path.read_bytes()
-    magic, version, length = struct.unpack("<III", data[:12])
-    assert (magic, version, length) == (0x46546C67, 2, len(data))
-    size = struct.unpack("<I", data[12:16])[0]
-    document = json.loads(data[20:20 + size])
-    assert document["extensionsRequired"] == ["KHR_mesh_quantization"]
-    # Quantized positions come back through the node transform within a millimetre.
-    node = document["nodes"][0]
-    view = document["bufferViews"][0]
-    binary = data[20 + size + 8:]
-    stored = np.frombuffer(binary, np.uint16, count=len(vertices) * 4, offset=view["byteOffset"]).reshape(-1, 4)[:, :3]
-    restored = stored * np.array(node["scale"]) + np.array(node["translation"])
-    assert np.allclose(restored, vertices, atol=1e-3)
-    assert document["accessors"][1]["normalized"] is True
-    assert document["images"][0]["mimeType"] == "image/jpeg"
+    assert data[:4] == b"PRH1"
+    # Header, then 5×5 heights on 16 bits, then the texture: no mesh data.
+    assert len(data) == 24 + 5 * 5 * 2 + len(b"\xff\xd8jpeg")
+    heights, cell_size, texture = read_relief_tile(data)
+    # Whole centimetres above the lowest node, with row deltas wrapping around 2^16.
+    assert np.allclose(heights, grid, atol=0.005 + 1e-6)
+    assert cell_size == pytest.approx(152.87, abs=1e-4)
+    assert texture == b"\xff\xd8jpeg"
+
+
+def test_relief_tile_spanning_more_than_655_m_keeps_a_coarser_step(tmp_path):
+    grid = np.array([[0.0, 900.0], [450.0, 12.0]], np.float32)
+    path = tmp_path / "tile.bin"
+    write_relief_tile(path, grid, 100.0, b"")
+    heights, _, _ = read_relief_tile(path.read_bytes())
+    assert np.allclose(heights, grid, atol=900 / 65535)
+
+
+def test_flat_relief_tile_keeps_its_height(tmp_path):
+    path = tmp_path / "tile.bin"
+    write_relief_tile(path, np.full((3, 3), 4.5, np.float32), 100.0, b"")
+    heights, _, texture = read_relief_tile(path.read_bytes())
+    assert np.allclose(heights, 4.5) and texture == b""
 
 
 def test_placement_keeps_method_and_frame_or_records_why_a_plan_is_unplaced():

@@ -12,13 +12,14 @@ Harvest (``IGN_ARCHIVE_DIR``, rebuildable offline):
 Published (``GEO_PLANS_DIR``, served by the private map routes):
 
 * ``aerial/``: the archived tiles, hard-linked (no second copy) with an index;
-* ``relief/{z}/{x}/{y}.glb``: one textured mesh per cell. The surface is the
+* ``relief/{z}/{x}/{y}.bin``: per cell, a 16-bit height grid and its orthophoto
+  texture (see ``write_relief_tile``). The surface is the
   terrain plus the smoothed height of the surface model above it, relative to the campus ground
   level, so the campus rests on the flat map and the surroundings keep their
   real relief.
 
-Mesh coordinates are local to the cell's north-west corner: x east and z south
-in EPSG:3857 metres, y up in real metres. The client converts them to MapLibre
+Grid nodes are local to the cell's north-west corner: x east and z south in
+EPSG:3857 metres, heights in real metres. The client converts them to MapLibre
 mercator units. Data © IGN, Licence Ouverte 2.0 (Etalab).
 """
 
@@ -223,74 +224,43 @@ def cell_texture(z, x, y, size):
     return buffer.getvalue()
 
 
-def write_glb(path, positions, uvs, indices, texture):
-    """Minimal binary glTF: one unlit textured mesh, quantized (KHR_mesh_quantization).
+RELIEF_MAGIC = b"PRH1"
+RELIEF_HEADER = struct.Struct("<4sHHfffI")
+# Vertical resolution of the relief: far below the 50 cm LiDAR spacing.
+HEIGHT_STEP = 0.01
 
-    Positions are 16-bit steps between the tile's bounds, restored by the node's
-    scale and translation (about 2 mm horizontally on a detail cell); texture
-    coordinates are normalized 16-bit. This more than halves the tiles.
+
+def write_relief_tile(path, grid, cell_size, texture):
+    """One relief cell: a header, the height grid on 16 bits, then the JPEG texture.
+
+    Nodes lie on a regular grid, so only heights are stored: the client rebuilds
+    positions, and shares the texture coordinates and triangle indices between
+    cells of the same size. Heights are whole steps of 1 cm above the cell's
+    lowest node (coarser only if the cell spans more than 655 m), stored as the
+    difference with the previous node of the row, modulo 2^16, so that gzip
+    compresses them. Header, little-endian: magic, samples, reserved, cell size
+    (EPSG:3857 metres), lowest height, height step (metres), texture length (bytes).
     """
-    vertices = positions.reshape(-1, 3).astype(np.float64)
-    low, high = vertices.min(0), vertices.max(0)
-    step = np.where(high > low, (high - low) / 65535, 1.0)
-    quantized = np.zeros((len(vertices), 4), np.uint16)  # padded to 8 bytes per vertex
-    quantized[:, :3] = np.round((vertices - low) / step)
-    coordinates = np.round(uvs.reshape(-1, 2).astype(np.float64) * 65535).astype(np.uint16)
-    chunks, views, offset = [], [], 0
-    for data, target, stride in ((quantized, 34962, 8), (coordinates, 34962, None), (indices, 34963, None), (texture, None, None)):
-        raw = data if isinstance(data, bytes) else data.tobytes()
-        view = {"buffer": 0, "byteOffset": offset, "byteLength": len(raw)}
-        if target:
-            view["target"] = target
-        if stride:
-            view["byteStride"] = stride
-        views.append(view)
-        padding = (4 - len(raw) % 4) % 4
-        chunks.append(raw + b"\0" * padding)
-        offset += len(raw) + padding
-    binary = b"".join(chunks)
-    document = {
-        "asset": {"version": "2.0", "generator": "PalantINT IGN relief"},
-        "extensionsUsed": ["KHR_materials_unlit", "KHR_mesh_quantization"],
-        "extensionsRequired": ["KHR_mesh_quantization"],
-        "scene": 0, "scenes": [{"nodes": [0]}],
-        "nodes": [{"mesh": 0, "translation": [float(v) for v in low], "scale": [float(v) for v in step]}],
-        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "indices": 2, "material": 0}]}],
-        "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "metallicFactor": 0, "roughnessFactor": 1}, "extensions": {"KHR_materials_unlit": {}}}],
-        "textures": [{"source": 0, "sampler": 0}],
-        "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 33071, "wrapT": 33071}],
-        "images": [{"bufferView": 3, "mimeType": "image/jpeg"}],
-        "accessors": [
-            {"bufferView": 0, "componentType": 5123, "count": len(vertices), "type": "VEC3",
-             "min": [int(v) for v in quantized[:, :3].min(0)], "max": [int(v) for v in quantized[:, :3].max(0)]},
-            {"bufferView": 1, "componentType": 5123, "normalized": True, "count": len(coordinates), "type": "VEC2"},
-            {"bufferView": 2, "componentType": 5123 if indices.dtype == np.uint16 else 5125, "count": len(indices), "type": "SCALAR"},
-        ],
-        "bufferViews": views,
-        "buffers": [{"byteLength": len(binary)}],
-    }
-    text = json.dumps(document, separators=(",", ":")).encode()
-    text += b" " * ((4 - len(text) % 4) % 4)
-    total = 12 + 8 + len(text) + 8 + len(binary)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(
-        struct.pack("<III", 0x46546C67, 2, total)
-        + struct.pack("<II", len(text), 0x4E4F534A) + text
-        + struct.pack("<II", len(binary), 0x004E4942) + binary
-    )
-
-
-def relief_mesh(grid, cell_size):
     samples = grid.shape[0]
-    step = cell_size / (samples - 1)
-    j, i = np.mgrid[0:samples, 0:samples]
-    positions = np.stack([i * step, grid, j * step], axis=-1).astype(np.float32).reshape(-1)
-    uvs = np.stack([i / (samples - 1), j / (samples - 1)], axis=-1).astype(np.float32).reshape(-1)
-    node = (j * samples + i)[:-1, :-1]
-    # Counter-clockwise when seen from above (+y), with z pointing south.
-    quads = np.stack([node, node + samples, node + 1, node + 1, node + samples, node + samples + 1], axis=-1)
-    indices = quads.reshape(-1).astype(np.uint16 if samples * samples <= 65536 else np.uint32)
-    return positions, uvs, indices
+    heights = grid.astype(np.float64)
+    low = float(heights.min())
+    step = max(HEIGHT_STEP, (float(heights.max()) - low) / 65535)
+    steps = np.round((heights - low) / step).astype(np.int64)
+    deltas = np.diff(steps, axis=1, prepend=0) % 65536
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(RELIEF_HEADER.pack(RELIEF_MAGIC, samples, 0, cell_size, low, step, len(texture)) + deltas.astype("<u2").tobytes() + texture)
+
+
+def read_relief_tile(data):
+    """(heights in metres as a samples×samples grid, cell size, JPEG texture); the inverse of ``write_relief_tile``."""
+    magic, samples, _, cell_size, low, step, texture_length = RELIEF_HEADER.unpack_from(data)
+    if magic != RELIEF_MAGIC:
+        raise ValueError("Not a PalantINT relief tile")
+    offset = RELIEF_HEADER.size
+    deltas = np.frombuffer(data, "<u2", samples * samples, offset).reshape(samples, samples)
+    steps = np.cumsum(deltas.astype(np.int64), axis=1) % 65536
+    texture = data[offset + samples * samples * 2:][:texture_length]
+    return steps * np.float64(step) + low, cell_size, texture
 
 
 def relief_cells(center, radius):
@@ -323,6 +293,9 @@ async def harvest_relief(client, cells, log, concurrency):
 def publish_relief(center, cells, log):
     """Rebuild every mesh from the archive; no network access."""
     reference = campus_ground(center)
+    # Meshes of the previous format are rebuilt as height grids: drop them.
+    for stale in RELIEF_DIR.glob("*/*/*.glb"):
+        stale.unlink()
     entries = []
     for (z, x, y), lod in cells:
         archive = ARCHIVED_HEIGHTS / str(z) / str(x) / f"{y}.npz"
@@ -331,12 +304,12 @@ def publish_relief(center, cells, log):
         with np.load(archive) as archived:
             grid = surface_grid(archived["mnt"], archived["mns"], reference)
         minx, _, maxx, _ = mercator_bounds(z, x, y)
-        positions, uvs, indices = relief_mesh(grid, maxx - minx)
-        write_glb(RELIEF_DIR / str(z) / str(x) / f"{y}.glb", positions, uvs, indices, cell_texture(z, x, y, SAMPLES[lod][1]))
-        entries.append({"z": z, "x": x, "y": y, "lod": lod, "path": f"{z}/{x}/{y}.glb", "bounds": [round(v, 8) for v in lonlat_bounds(z, x, y)]})
+        write_relief_tile(RELIEF_DIR / str(z) / str(x) / f"{y}.bin", grid, maxx - minx, cell_texture(z, x, y, SAMPLES[lod][1]))
+        entries.append({"z": z, "x": x, "y": y, "lod": lod, "path": f"{z}/{x}/{y}.bin", "bounds": [round(v, 8) for v in lonlat_bounds(z, x, y)]})
     write_json(RELIEF_DIR / "index.json", {
         "source": "ign", "terrain_layer": TERRAIN_LAYER, "surface_layer": SURFACE_LAYER, "texture_layer": AERIAL_LAYER,
         "attribution": ATTRIBUTION, "license": "Licence Ouverte 2.0",
+        "format": "palantint_relief_v1",
         "coordinate_space": "cell_local_epsg3857_metres_y_up",
         "ground_reference_m": round(reference, 2),
         "extracted_at": datetime.now(timezone.utc).isoformat(),
