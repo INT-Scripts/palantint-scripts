@@ -224,13 +224,26 @@ def cell_texture(z, x, y, size):
 
 
 def write_glb(path, positions, uvs, indices, texture):
-    """Minimal binary glTF: one unlit textured mesh."""
+    """Minimal binary glTF: one unlit textured mesh, quantized (KHR_mesh_quantization).
+
+    Positions are 16-bit steps between the tile's bounds, restored by the node's
+    scale and translation (about 2 mm horizontally on a detail cell); texture
+    coordinates are normalized 16-bit. This more than halves the tiles.
+    """
+    vertices = positions.reshape(-1, 3).astype(np.float64)
+    low, high = vertices.min(0), vertices.max(0)
+    step = np.where(high > low, (high - low) / 65535, 1.0)
+    quantized = np.zeros((len(vertices), 4), np.uint16)  # padded to 8 bytes per vertex
+    quantized[:, :3] = np.round((vertices - low) / step)
+    coordinates = np.round(uvs.reshape(-1, 2).astype(np.float64) * 65535).astype(np.uint16)
     chunks, views, offset = [], [], 0
-    for data, target in ((positions, 34962), (uvs, 34962), (indices, 34963), (texture, None)):
+    for data, target, stride in ((quantized, 34962, 8), (coordinates, 34962, None), (indices, 34963, None), (texture, None, None)):
         raw = data if isinstance(data, bytes) else data.tobytes()
         view = {"buffer": 0, "byteOffset": offset, "byteLength": len(raw)}
         if target:
             view["target"] = target
+        if stride:
+            view["byteStride"] = stride
         views.append(view)
         padding = (4 - len(raw) % 4) % 4
         chunks.append(raw + b"\0" * padding)
@@ -238,17 +251,19 @@ def write_glb(path, positions, uvs, indices, texture):
     binary = b"".join(chunks)
     document = {
         "asset": {"version": "2.0", "generator": "PalantINT IGN relief"},
-        "extensionsUsed": ["KHR_materials_unlit"],
-        "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+        "extensionsUsed": ["KHR_materials_unlit", "KHR_mesh_quantization"],
+        "extensionsRequired": ["KHR_mesh_quantization"],
+        "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0, "translation": [float(v) for v in low], "scale": [float(v) for v in step]}],
         "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "indices": 2, "material": 0}]}],
         "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "metallicFactor": 0, "roughnessFactor": 1}, "extensions": {"KHR_materials_unlit": {}}}],
         "textures": [{"source": 0, "sampler": 0}],
         "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 33071, "wrapT": 33071}],
         "images": [{"bufferView": 3, "mimeType": "image/jpeg"}],
         "accessors": [
-            {"bufferView": 0, "componentType": 5126, "count": len(positions) // 3, "type": "VEC3",
-             "min": [float(positions[i::3].min()) for i in range(3)], "max": [float(positions[i::3].max()) for i in range(3)]},
-            {"bufferView": 1, "componentType": 5126, "count": len(uvs) // 2, "type": "VEC2"},
+            {"bufferView": 0, "componentType": 5123, "count": len(vertices), "type": "VEC3",
+             "min": [int(v) for v in quantized[:, :3].min(0)], "max": [int(v) for v in quantized[:, :3].max(0)]},
+            {"bufferView": 1, "componentType": 5123, "normalized": True, "count": len(coordinates), "type": "VEC2"},
             {"bufferView": 2, "componentType": 5123 if indices.dtype == np.uint16 else 5125, "count": len(indices), "type": "SCALAR"},
         ],
         "bufferViews": views,
@@ -274,7 +289,7 @@ def relief_mesh(grid, cell_size):
     node = (j * samples + i)[:-1, :-1]
     # Counter-clockwise when seen from above (+y), with z pointing south.
     quads = np.stack([node, node + samples, node + 1, node + 1, node + samples, node + samples + 1], axis=-1)
-    indices = quads.reshape(-1).astype(np.uint16 if samples * samples < 65536 else np.uint32)
+    indices = quads.reshape(-1).astype(np.uint16 if samples * samples <= 65536 else np.uint32)
     return positions, uvs, indices
 
 
@@ -285,8 +300,9 @@ def relief_cells(center, radius):
 
 
 # Detail cells (~100 m) get a node every ~0.4 m, close to the 50 cm LiDAR, so walls
-# stand where the orthophoto shows them; context cells stay lighter.
-SAMPLES = {"detail": (257, 512), "context": (65, 256)}
+# stand where the orthophoto shows them; context cells stay lighter. 256 nodes keep
+# the vertex count at 65 536, so triangle indices stay 16-bit.
+SAMPLES = {"detail": (256, 512), "context": (65, 256)}
 
 
 async def harvest_relief(client, cells, log, concurrency):

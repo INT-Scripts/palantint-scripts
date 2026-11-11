@@ -113,8 +113,15 @@ def test_relief_tile_is_a_valid_unlit_glb_facing_up(tmp_path):
     assert (magic, version, length) == (0x46546C67, 2, len(data))
     size = struct.unpack("<I", data[12:16])[0]
     document = json.loads(data[20:20 + size])
-    assert document["extensionsUsed"] == ["KHR_materials_unlit"]
-    assert document["accessors"][0]["max"] == [100.0, 10.0, 100.0]
+    assert document["extensionsRequired"] == ["KHR_mesh_quantization"]
+    # Quantized positions come back through the node transform within a millimetre.
+    node = document["nodes"][0]
+    view = document["bufferViews"][0]
+    binary = data[20 + size + 8:]
+    stored = np.frombuffer(binary, np.uint16, count=len(vertices) * 4, offset=view["byteOffset"]).reshape(-1, 4)[:, :3]
+    restored = stored * np.array(node["scale"]) + np.array(node["translation"])
+    assert np.allclose(restored, vertices, atol=1e-3)
+    assert document["accessors"][1]["normalized"] is True
     assert document["images"][0]["mimeType"] == "image/jpeg"
 
 
