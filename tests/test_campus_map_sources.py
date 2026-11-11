@@ -131,14 +131,14 @@ def test_placement_keeps_method_and_frame_or_records_why_a_plan_is_unplaced():
     assert placement("U9_1", registration, "source")["status"] == "unplaced"
 
 
-def test_surface_combines_terrain_and_smoothed_height_above_ground():
+def test_surface_combines_terrain_and_smoothed_surface_model():
     terrain = np.full((7, 7), 90.0, np.float32)
     terrain[:, 4:] = 70.0
-    above = np.zeros((7, 7), np.float32)
-    above[3, 2] = 30.0  # isolated spike: removed by the median
-    above[1:6, 4:6] = 12.0  # a building block: kept
-    above[0, 0] = -9999.0  # no data
-    surface = surface_grid(terrain, above, reference=90.0)
+    model = terrain.copy()
+    model[3, 2] += 30.0  # isolated spike: removed by the median
+    model[1:6, 4:6] += 12.0  # a building block: kept
+    model[0, 0] = -9999.0  # no data
+    surface = surface_grid(terrain, model, reference=90.0)
     assert surface.shape == (5, 5)
     assert surface[2, 1] == 0.0
     assert surface[2, 3] == -20.0 + 12.0

@@ -5,13 +5,15 @@ Harvest (``IGN_ARCHIVE_DIR``, rebuildable offline):
 * ``aerial/{z}/{x}/{y}.jpg``: Web Mercator tiles of the 20 cm orthophoto
   (``HR.ORTHOIMAGERY.ORTHOPHOTOS``);
 * ``heights/{z}/{x}/{y}.npz``: per z18 cell, the LiDAR HD terrain (``MNT``) and
-  height above ground (``MNH``) grids, 50 cm sources sampled on the mesh nodes.
+  surface (``MNS``, roofs and canopy) elevation grids, 50 cm sources sampled on
+  the mesh nodes. Both models are needed: the terrain gives the ground and the
+  campus reference level, the surface the volumes the orthophoto is draped on.
 
 Published (``GEO_PLANS_DIR``, served by the private map routes):
 
 * ``aerial/``: the archived tiles, hard-linked (no second copy) with an index;
 * ``relief/{z}/{x}/{y}.glb``: one textured mesh per cell. The surface is the
-  terrain plus the smoothed height above ground, relative to the campus ground
+  terrain plus the smoothed height of the surface model above it, relative to the campus ground
   level, so the campus rests on the flat map and the surroundings keep their
   real relief.
 
@@ -38,7 +40,7 @@ from palantint_scripts.scrapers.wemap import tile_coordinates, write_json
 WMTS_URL = "https://data.geopf.fr/wmts"
 WMS_URL = "https://data.geopf.fr/wms-r/wms"
 AERIAL_LAYER = "HR.ORTHOIMAGERY.ORTHOPHOTOS"
-HEIGHT_LAYER = "IGNF_LIDAR-HD_MNH_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93"
+SURFACE_LAYER = "IGNF_LIDAR-HD_MNS_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93"
 TERRAIN_LAYER = "IGNF_LIDAR-HD_MNT_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93"
 ARCHIVED_AERIAL = IGN_ARCHIVE_DIR / "aerial"
 ARCHIVED_HEIGHTS = IGN_ARCHIVE_DIR / "heights"
@@ -167,23 +169,25 @@ async def harvest_heights(client, z, x, y, samples):
     path = ARCHIVED_HEIGHTS / str(z) / str(x) / f"{y}.npz"
     if path.exists():
         with np.load(path) as archived:
-            if archived["mnh"].shape[0] == samples + 2:
+            if "mns" in archived and archived["mns"].shape[0] == samples + 2:
                 return path
     terrain = await wms_grid(client, TERRAIN_LAYER, z, x, y, samples)
-    above = await wms_grid(client, HEIGHT_LAYER, z, x, y, samples)
+    surface = await wms_grid(client, SURFACE_LAYER, z, x, y, samples)
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, mnt=terrain, mnh=above)
+    np.savez_compressed(path, mnt=terrain, mns=surface)
     return path
 
 
-def surface_grid(terrain, above, reference):
-    """Terrain plus smoothed height above ground, relative to the campus ground level.
+def surface_grid(terrain, surface, reference):
+    """Terrain plus the smoothed height of the surface model above it, relative to the campus ground level.
 
     The 3×3 median removes isolated canopy and noise spikes from the height
     above ground; it uses the archived margin, so shared edges stay identical.
     """
-    size = above.shape[0]
-    above = np.where(np.isfinite(above) & (above > -5) & (above < 250), above, 0)
+    size = surface.shape[0]
+    known = np.isfinite(terrain) & (terrain > -100) & (terrain < 5000) & np.isfinite(surface) & (surface > -100) & (surface < 5000)
+    above = np.where(known, surface - terrain, 0)
+    above = np.where((above > -5) & (above < 250), above, 0)
     above = np.clip(above, 0, None)
     neighbours = [above[1 + dy:size - 1 + dy, 1 + dx:size - 1 + dx] for dy in (-1, 0, 1) for dx in (-1, 0, 1)]
     smoothed = np.median(np.stack(neighbours), axis=0)
@@ -280,7 +284,9 @@ def relief_cells(center, radius):
     return [(cell, "detail" if cell in detail else "context") for cell in cells]
 
 
-SAMPLES = {"detail": (129, 512), "context": (65, 256)}
+# Detail cells (~100 m) get a node every ~0.4 m, close to the 50 cm LiDAR, so walls
+# stand where the orthophoto shows them; context cells stay lighter.
+SAMPLES = {"detail": (257, 512), "context": (65, 256)}
 
 
 async def harvest_relief(client, cells, log, concurrency):
@@ -307,13 +313,13 @@ def publish_relief(center, cells, log):
         if not archive.exists():
             continue
         with np.load(archive) as archived:
-            grid = surface_grid(archived["mnt"], archived["mnh"], reference)
+            grid = surface_grid(archived["mnt"], archived["mns"], reference)
         minx, _, maxx, _ = mercator_bounds(z, x, y)
         positions, uvs, indices = relief_mesh(grid, maxx - minx)
         write_glb(RELIEF_DIR / str(z) / str(x) / f"{y}.glb", positions, uvs, indices, cell_texture(z, x, y, SAMPLES[lod][1]))
         entries.append({"z": z, "x": x, "y": y, "lod": lod, "path": f"{z}/{x}/{y}.glb", "bounds": [round(v, 8) for v in lonlat_bounds(z, x, y)]})
     write_json(RELIEF_DIR / "index.json", {
-        "source": "ign", "terrain_layer": TERRAIN_LAYER, "height_layer": HEIGHT_LAYER, "texture_layer": AERIAL_LAYER,
+        "source": "ign", "terrain_layer": TERRAIN_LAYER, "surface_layer": SURFACE_LAYER, "texture_layer": AERIAL_LAYER,
         "attribution": ATTRIBUTION, "license": "Licence Ouverte 2.0",
         "coordinate_space": "cell_local_epsg3857_metres_y_up",
         "ground_reference_m": round(reference, 2),
@@ -350,7 +356,7 @@ async def scrape_ign(progress=None, task_id=None, config=None, log=print):
                 log("Téléchargement des photographies aériennes IGN (20 cm)…")
                 await download_aerial(client, aerial_tiles(center), log, concurrency)
             if config.get("ign_relief", True):
-                log("Téléchargement du LiDAR HD IGN (terrain et sursol)…")
+                log("Téléchargement du LiDAR HD IGN (terrain et surface)…")
                 await harvest_relief(client, cells, log, concurrency)
     if config.get("ign_aerial", True):
         publish_aerial(center, log)
